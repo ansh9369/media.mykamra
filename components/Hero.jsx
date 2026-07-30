@@ -481,6 +481,7 @@ export default function Hero() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('All');
+  const [downloadingFormatId, setDownloadingFormatId] = useState(null);
   const inputRef = useRef(null);
 
   const tabs = useMemo(() => {
@@ -524,11 +525,47 @@ export default function Hero() {
     }
   }
 
-  function handleDownload(format) {
-    if (format.downloadUrl && format.downloadUrl !== '#') {
-      window.open(format.downloadUrl, '_blank');
-    } else if (result?.id) {
-      window.open(`https://www.youtube.com/watch?v=${result.id}`, '_blank');
+  async function handleDownload(format) {
+    if (downloadingFormatId) return;
+    setDownloadingFormatId(format.formatId);
+
+    try {
+      const title = result?.title || 'media';
+      const ext = format.ext || 'mp4';
+      const videoId = result?.id || '';
+      const rawUrl = format.downloadUrl || '';
+
+      const downloadApiUrl = `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${encodeURIComponent(ext)}&videoId=${encodeURIComponent(videoId)}`;
+
+      // Fetch blob and trigger browser download
+      const res = await fetch(downloadApiUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = blobUrl;
+        a.download = `${title.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'video'}_${format.resolution}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          window.URL.revokeObjectURL(blobUrl);
+        }, 100);
+      } else {
+        // Fallback to direct anchor download
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = downloadApiUrl;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => document.body.removeChild(a), 100);
+      }
+    } catch (err) {
+      console.error('Download error:', err);
+    } finally {
+      setTimeout(() => setDownloadingFormatId(null), 1000);
     }
   }
 
@@ -709,6 +746,7 @@ export default function Hero() {
                       format={format}
                       index={i}
                       onDownload={handleDownload}
+                      isDownloading={downloadingFormatId === format.formatId}
                     />
                   ))}
                 </AnimatePresence>
