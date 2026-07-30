@@ -525,7 +525,7 @@ export default function Hero() {
     }
   }
 
-  async function handleDownload(format) {
+  function handleDownload(format) {
     if (downloadingFormatId) return;
     setDownloadingFormatId(format.formatId);
 
@@ -535,37 +535,14 @@ export default function Hero() {
       const videoId = result?.id || '';
       const rawUrl = format.downloadUrl || '';
 
-      const downloadApiUrl = `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${encodeURIComponent(ext)}&videoId=${encodeURIComponent(videoId)}`;
+      const downloadApiUrl = `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${encodeURIComponent(ext)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(format.resolution)}`;
 
-      // Fetch blob and trigger browser download
-      const res = await fetch(downloadApiUrl);
-      if (res.ok) {
-        const blob = await res.blob();
-        const blobUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = blobUrl;
-        a.download = `${title.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'video'}_${format.resolution}.${ext}`;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          document.body.removeChild(a);
-          window.URL.revokeObjectURL(blobUrl);
-        }, 100);
-      } else {
-        // Fallback to direct anchor download
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = downloadApiUrl;
-        a.target = '_blank';
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => document.body.removeChild(a), 100);
-      }
+      // Native browser top-level location download (bypasses CORS restrictions)
+      window.location.href = downloadApiUrl;
     } catch (err) {
       console.error('Download error:', err);
     } finally {
-      setTimeout(() => setDownloadingFormatId(null), 1000);
+      setTimeout(() => setDownloadingFormatId(null), 3000);
     }
   }
 
