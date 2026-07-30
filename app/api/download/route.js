@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import ytdl from '@distube/ytdl-core';
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -13,48 +14,37 @@ export async function GET(request) {
   const filename = `${sanitizedTitle}.${ext}`;
 
   try {
-    // If targetUrl is missing or points to a YouTube watch page, resolve a direct stream URL
+    // If targetUrl is missing or points to a YouTube watch page, extract direct stream URL via ytdl-core
     if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
       if (videoId) {
-        const instances = ['https://inv.tux.pizza', 'https://invidious.nerdvpn.de', 'https://vid.puffyan.us'];
-        for (const instance of instances) {
-          try {
-            const invRes = await fetch(`${instance}/api/v1/videos/${videoId}`, {
-              headers: { 'User-Agent': 'Mozilla/5.0' },
-            });
-            if (invRes.ok) {
-              const invData = await invRes.json();
-              if (isAudioOnly) {
-                const audioStreams = (invData.adaptiveFormats || []).filter(
-                  (s) => s.type && s.type.startsWith('audio')
-                );
-                if (audioStreams.length > 0 && audioStreams[0].url) {
-                  targetUrl = audioStreams[0].url;
-                  break;
-                }
-              }
-
-              const videoStreams = invData.formatStreams || [];
-              if (videoStreams.length > 0 && videoStreams[0].url) {
-                targetUrl = videoStreams[0].url;
-                break;
-              }
-            }
-          } catch (e) {
-            // try next instance
+        try {
+          const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, {
+            requestOptions: {
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              },
+            },
+          });
+          const chosenFormat = ytdl.chooseFormat(info.formats, {
+            quality: isAudioOnly ? 'highestaudio' : 'highestvideo',
+          });
+          if (chosenFormat && chosenFormat.url) {
+            targetUrl = chosenFormat.url;
           }
+        } catch (e) {
+          console.error('ytdl-core stream resolution error:', e.message);
         }
       }
     }
 
+    // If still no direct stream URL, redirect to watch page as safety fallback
     if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
-      return NextResponse.json(
-        { error: 'Direct media stream unavailable.' },
-        { status: 400 }
-      );
+      const fallbackWatchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : 'https://www.youtube.com';
+      return NextResponse.redirect(fallbackWatchUrl);
     }
 
-    // Fetch the stream from googlevideo/invidious CDN
+    // Fetch the direct stream from googlevideo CDN
     const mediaRes = await fetch(targetUrl, {
       headers: {
         'User-Agent':
@@ -84,10 +74,11 @@ export async function GET(request) {
       headers,
     });
   } catch (err) {
-    console.error('Download stream error:', err);
+    console.error('Download route error:', err);
     if (targetUrl && !targetUrl.includes('youtube.com')) {
       return NextResponse.redirect(targetUrl);
     }
-    return NextResponse.json({ error: 'Failed to download media' }, { status: 500 });
+    const fallbackWatchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : 'https://www.youtube.com';
+    return NextResponse.redirect(fallbackWatchUrl);
   }
 }

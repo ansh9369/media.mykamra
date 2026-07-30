@@ -1,22 +1,112 @@
 import { NextResponse } from 'next/server';
+import ytdl from '@distube/ytdl-core';
 import { spawn } from 'child_process';
 import path from 'path';
 
-// 1. Python yt_dlp local method (works when python is installed)
+// 1. Primary Node.js Extractor using @distube/ytdl-core (100% Vercel Serverless Compatible)
+async function extractWithYtdlCore(url) {
+  try {
+    const info = await ytdl.getInfo(url, {
+      requestOptions: {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+      },
+    });
+
+    if (!info || !info.videoDetails) return null;
+
+    const details = info.videoDetails;
+    const videoId = details.videoId || '';
+    const title = details.title || 'YouTube Video';
+    const uploader = details.author ? details.author.name : 'YouTube Creator';
+    const duration = parseInt(details.lengthSeconds || '0', 10);
+    const thumbnail =
+      details.thumbnails && details.thumbnails.length > 0
+        ? details.thumbnails[details.thumbnails.length - 1].url
+        : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    const viewCount = parseInt(details.viewCount || '0', 10);
+    const uploadDate = details.publishDate || '';
+
+    const rawFormats = info.formats || [];
+    const processedFormats = [];
+    const seen = new Set();
+
+    for (const f of rawFormats) {
+      if (!f.url) continue;
+
+      const hasVideo = Boolean(f.hasVideo);
+      const hasAudio = Boolean(f.hasAudio);
+
+      if (!hasVideo && !hasAudio) continue;
+
+      let resolution = 'SD';
+      if (!hasVideo && hasAudio) {
+        resolution = 'audio only';
+      } else if (f.qualityLabel) {
+        resolution = f.qualityLabel;
+      } else if (f.height) {
+        resolution = `${f.height}p`;
+      }
+
+      const ext = f.container || (hasVideo ? 'mp4' : 'm4a');
+      const key = `${resolution}_${ext}_${hasVideo}_${hasAudio}`;
+
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const filesize = f.contentLength ? parseInt(f.contentLength, 10) : (f.bitrate ? Math.round((f.bitrate * duration) / 8) : 0);
+
+      processedFormats.push({
+        formatId: String(f.itag || Math.random().toString(36).substring(7)),
+        ext,
+        resolution,
+        fps: f.fps || null,
+        hasVideo,
+        hasAudio,
+        playableAsIs: hasVideo && hasAudio,
+        filesizeApprox: filesize,
+        note: resolution,
+        downloadUrl: f.url,
+      });
+    }
+
+    if (processedFormats.length === 0) return null;
+
+    const presets = Array.from(new Set(processedFormats.map((f) => f.resolution)));
+
+    return {
+      success: true,
+      data: {
+        type: 'video',
+        id: videoId,
+        title,
+        uploader,
+        duration,
+        thumbnail,
+        viewCount,
+        uploadDate,
+        availableQualityPresets: presets,
+        formats: processedFormats,
+      },
+    };
+  } catch (err) {
+    console.error('ytdl-core extraction error:', err.message);
+    return null;
+  }
+}
+
+// 2. Local Python yt_dlp Extractor
 function runYtDlpPython(url) {
   return new Promise((resolve) => {
     const scriptPath = path.join(process.cwd(), 'lib', 'ytdlp.py');
     const pythonProcess = spawn('python', [scriptPath, url]);
 
     let stdoutData = '';
-    let stderrData = '';
 
     pythonProcess.stdout.on('data', (data) => {
       stdoutData += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      stderrData += data.toString();
     });
 
     pythonProcess.on('close', (code) => {
@@ -39,131 +129,7 @@ function runYtDlpPython(url) {
   });
 }
 
-// 2. Invidious/Cloud API Fallback (works on Vercel Serverless Functions without Python)
-async function fetchInvidiousCloud(videoId) {
-  const instances = [
-    'https://inv.tux.pizza',
-    'https://invidious.nerdvpn.de',
-    'https://vid.puffyan.us',
-    'https://invidious.drgns.space',
-  ];
-
-  for (const instance of instances) {
-    try {
-      const res = await fetch(`${instance}/api/v1/videos/${videoId}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        next: { revalidate: 0 },
-      });
-
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      if (!data || !data.title) continue;
-
-      const formatStreams = data.formatStreams || [];
-      const adaptiveFormats = data.adaptiveFormats || [];
-
-      const processedFormats = [];
-      const seen = new Set();
-
-      // Process direct combined video+audio streams
-      for (const s of formatStreams) {
-        const resLabel = s.qualityLabel || s.quality || '720p';
-        const ext = s.container || 'mp4';
-        const key = `${resLabel}_${ext}_combined`;
-
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        processedFormats.append({
-          formatId: `inv_${resLabel}_${ext}`,
-          ext: ext,
-          resolution: resLabel,
-          fps: s.fps || 30,
-          hasVideo: true,
-          hasAudio: true,
-          playableAsIs: true,
-          filesizeApprox: s.clen ? parseInt(s.clen, 10) : 35000000,
-          note: `${resLabel} HD`,
-          downloadUrl: s.url,
-        });
-      }
-
-      // Process adaptive video and audio streams
-      for (const s of adaptiveFormats) {
-        const isAudio = s.type && s.type.startsWith('audio');
-        const isVideo = s.type && s.type.startsWith('video');
-
-        if (isAudio) {
-          const ext = s.container || 'm4a';
-          const key = `audio_${ext}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-
-          processedFormats.append({
-            formatId: `inv_audio_${ext}`,
-            ext: ext,
-            resolution: 'audio only',
-            fps: null,
-            hasVideo: false,
-            hasAudio: true,
-            playableAsIs: false,
-            filesizeApprox: s.clen ? parseInt(s.clen, 10) : 5000000,
-            note: 'Audio Only',
-            downloadUrl: s.url,
-          });
-        } else if (isVideo && s.qualityLabel) {
-          const resLabel = s.qualityLabel;
-          const ext = s.container || 'mp4';
-          const key = `${resLabel}_${ext}_video`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-
-          processedFormats.append({
-            formatId: `inv_${resLabel}_${ext}`,
-            ext: ext,
-            resolution: resLabel,
-            fps: s.fps || 30,
-            hasVideo: true,
-            hasAudio: false,
-            playableAsIs: false,
-            filesizeApprox: s.clen ? parseInt(s.clen, 10) : 25000000,
-            note: `${resLabel}`,
-            downloadUrl: s.url,
-          });
-        }
-      }
-
-      if (processedFormats.length === 0) continue;
-
-      const presets = Array.from(new Set(processedFormats.map((f) => f.resolution)));
-
-      return {
-        success: true,
-        data: {
-          type: 'video',
-          id: videoId,
-          title: data.title,
-          uploader: data.author || 'YouTube Channel',
-          duration: data.lengthSeconds || 0,
-          thumbnail:
-            (data.videoThumbnails && data.videoThumbnails[0] && data.videoThumbnails[0].url) ||
-            `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-          viewCount: data.viewCount || 0,
-          uploadDate: data.publishedText || '',
-          availableQualityPresets: presets,
-          formats: processedFormats,
-        },
-      };
-    } catch (err) {
-      console.error(`Invidious instance ${instance} error:`, err);
-    }
-  }
-
-  return null;
-}
-
-// 3. Fallback oEmbed metadata
+// 3. Fallback oEmbed metadata generator
 async function fetchOEmbedFallback(url, videoId) {
   try {
     const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
@@ -235,7 +201,7 @@ export async function POST(request) {
 
     if (!url || typeof url !== 'string' || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
       return NextResponse.json(
-        { success: false, error: 'Please enter a valid YouTube URL' },
+        { success: false, error: 'Please enter a valid YouTube URL (e.g. https://www.youtube.com/watch?v=...)' },
         { status: 400 }
       );
     }
@@ -243,18 +209,16 @@ export async function POST(request) {
     const match = url.match(/(?:v=|\/embed\/|\/144\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     const videoId = match ? match[1] : '';
 
-    // Step 1: Try Python local extraction (for local dev / VPS)
+    // Step 1: Extract with @distube/ytdl-core (Fast & Serverless Native)
+    const ytdlResult = await extractWithYtdlCore(url.trim());
+    if (ytdlResult && ytdlResult.success) {
+      return NextResponse.json(ytdlResult);
+    }
+
+    // Step 2: Try Local Python yt_dlp extraction
     const pyResult = await runYtDlpPython(url.trim());
     if (pyResult && pyResult.success) {
       return NextResponse.json(pyResult);
-    }
-
-    // Step 2: Try Cloud Extraction APIs (Works on Vercel Serverless!)
-    if (videoId) {
-      const cloudResult = await fetchInvidiousCloud(videoId);
-      if (cloudResult && cloudResult.success) {
-        return NextResponse.json(cloudResult);
-      }
     }
 
     // Step 3: Fallback oEmbed
@@ -270,6 +234,7 @@ export async function POST(request) {
       { status: 500 }
     );
   } catch (err) {
+    console.error('Probe API route error:', err);
     return NextResponse.json(
       { success: false, error: err.message || 'Internal Server Error' },
       { status: 500 }
