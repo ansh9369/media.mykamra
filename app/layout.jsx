@@ -14,9 +14,27 @@ const sora = Sora({
 });
 
 export const metadata = {
-  title: 'Signal Deck — paste a link, pull the tape',
+  title: 'MyKamra Media — Fast 4K & MP3 Extractor | media.mykamra.in',
   description:
-    'Paste a video link, let the deck read the signal, then pull the format you want.',
+    'Official media processing hub by MyKamra (mykamra.in). Download and convert YouTube videos, audio, and media signals in 4K, 1080p, 720p, and high-bitrate MP3 instantly.',
+  keywords: [
+    'MyKamra',
+    'mykamra.in',
+    'media.mykamra.in',
+    'YouTube Downloader',
+    'Video Extractor',
+    '4K Video Downloader',
+    'MP3 Converter',
+    'Signal Deck',
+  ],
+  openGraph: {
+    title: 'MyKamra Media — Fast 4K & MP3 Extractor | media.mykamra.in',
+    description:
+      'Official media extraction and signal processing tool by MyKamra.in. Convert and download YouTube videos in 4K, 1080p, and MP3 instantly.',
+    url: 'https://media.mykamra.in',
+    siteName: 'MyKamra Media',
+    type: 'website',
+  },
 };
 
 export default function RootLayout({ children }) {

@@ -469,7 +469,7 @@ import VideoMeta from './VideoMeta';
 import QualityTabs from './QualityTabs';
 import FormatRow from './FormatRow';
 // import TapeParallax from './TapeParallax';
-import { mockProbe } from '@/lib/mockProbe';
+import { probeVideo } from '@/lib/probe';
 import { groupFormatsByResolution } from '@/lib/format';
 
 const STATE = { IDLE: 'idle', SCANNING: 'scanning', LOCKED: 'locked', ERROR: 'error' };
@@ -505,7 +505,7 @@ export default function Hero() {
     setActiveTab('All');
     setState(STATE.SCANNING);
     try {
-      const data = await mockProbe(url.trim());
+      const data = await probeVideo(url.trim());
       setResult(data);
       setState(STATE.LOCKED);
     } catch (e) {
@@ -525,8 +525,11 @@ export default function Hero() {
   }
 
   function handleDownload(format) {
-    // Wire to format.downloadUrl from your real backend response.
-    console.log('download requested:', format);
+    if (format.downloadUrl && format.downloadUrl !== '#') {
+      window.open(format.downloadUrl, '_blank');
+    } else if (result?.id) {
+      window.open(`https://www.youtube.com/watch?v=${result.id}`, '_blank');
+    }
   }
 
   return (
@@ -543,32 +546,42 @@ export default function Hero() {
     >
       {/* <TapeParallax /> */}
 
-      <div style={{ textAlign: 'center', maxWidth: 680 }}>
-        <motion.div
+      <div style={{ textAlign: 'center', maxWidth: 700 }}>
+        <motion.a
+          href="https://www.mykamra.in/"
+          target="_blank"
+          rel="noopener noreferrer"
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
           style={{
-            display: 'inline-block',
-            padding: '5px 12px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 14px',
             borderRadius: 20,
-            border: '1px solid var(--line)',
+            border: '1px solid #E8A94C44',
+            background: '#E8A94C12',
             fontFamily: 'var(--font-display)',
-            fontSize: 11,
-            letterSpacing: 1,
+            fontSize: 11.5,
+            fontWeight: 700,
+            letterSpacing: 0.8,
             color: 'var(--tape)',
-            marginBottom: 20,
+            marginBottom: 22,
+            textDecoration: 'none',
           }}
         >
-          NO SIGN-UP · NO WATERMARK
-        </motion.div>
+          <span>OFFICIAL SUBDOMAIN</span>
+          <span style={{ color: 'var(--text-lo)' }}>·</span>
+          <span>MEDIA.MYKAMRA.IN</span>
+        </motion.a>
         <motion.h1
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.06 }}
           style={{
             fontFamily: 'var(--font-display)',
-            fontSize: 'clamp(32px, 5.5vw, 52px)',
+            fontSize: 'clamp(32px, 5.5vw, 54px)',
             fontWeight: 800,
             lineHeight: 1.12,
             margin: 0,
@@ -582,10 +595,9 @@ export default function Hero() {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.12 }}
-          style={{ color: 'var(--text-lo)', fontSize: 17, marginTop: 16 }}
+          style={{ color: 'var(--text-lo)', fontSize: 16.5, marginTop: 16, lineHeight: 1.55 }}
         >
-          Paste a video link, let the deck read the signal, then choose the
-          format and quality you want to keep.
+          Powered by <strong style={{ color: 'var(--text-hi)' }}>MyKamra</strong>. Paste any video link, let the signal processor extract all 4K, 1080p, and MP3 formats instantly.
         </motion.p>
       </div>
 
