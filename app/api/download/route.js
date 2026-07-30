@@ -6,37 +6,55 @@ export async function GET(request) {
   const title = searchParams.get('title') || 'video';
   const ext = searchParams.get('ext') || 'mp4';
   const videoId = searchParams.get('videoId');
+  const resolution = searchParams.get('resolution') || '';
 
-  const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'media';
+  const isAudioOnly = resolution.toLowerCase().includes('audio') || ext === 'm4a' || ext === 'mp3';
+  const sanitizedTitle = title.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || (isAudioOnly ? 'audio' : 'video');
   const filename = `${sanitizedTitle}.${ext}`;
 
   try {
-    // If targetUrl is a YouTube watch URL or not a direct media link, try resolving a direct stream URL
+    // If targetUrl is missing or points to a YouTube watch page, resolve a direct stream URL
     if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
       if (videoId) {
-        // Try fetching direct stream URL from Invidious instance
-        const invRes = await fetch(`https://inv.tux.pizza/api/v1/videos/${videoId}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-        });
-        if (invRes.ok) {
-          const invData = await invRes.json();
-          const streams = invData.formatStreams || [];
-          if (streams.length > 0 && streams[0].url) {
-            targetUrl = streams[0].url;
+        const instances = ['https://inv.tux.pizza', 'https://invidious.nerdvpn.de', 'https://vid.puffyan.us'];
+        for (const instance of instances) {
+          try {
+            const invRes = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+              headers: { 'User-Agent': 'Mozilla/5.0' },
+            });
+            if (invRes.ok) {
+              const invData = await invRes.json();
+              if (isAudioOnly) {
+                const audioStreams = (invData.adaptiveFormats || []).filter(
+                  (s) => s.type && s.type.startsWith('audio')
+                );
+                if (audioStreams.length > 0 && audioStreams[0].url) {
+                  targetUrl = audioStreams[0].url;
+                  break;
+                }
+              }
+
+              const videoStreams = invData.formatStreams || [];
+              if (videoStreams.length > 0 && videoStreams[0].url) {
+                targetUrl = videoStreams[0].url;
+                break;
+              }
+            }
+          } catch (e) {
+            // try next instance
           }
         }
       }
     }
 
     if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
-      // If still YouTube URL, redirect gracefully or return error
       return NextResponse.json(
-        { error: 'Direct media stream not available for this track.' },
+        { error: 'Direct media stream unavailable.' },
         { status: 400 }
       );
     }
 
-    // Fetch the direct video/audio stream from googlevideo/invidious stream server
+    // Fetch the stream from googlevideo/invidious CDN
     const mediaRes = await fetch(targetUrl, {
       headers: {
         'User-Agent':
@@ -49,11 +67,13 @@ export async function GET(request) {
     }
 
     const headers = new Headers();
-    const contentType = mediaRes.headers.get('content-type') || (ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
-    
+    const contentType =
+      mediaRes.headers.get('content-type') ||
+      (isAudioOnly ? 'audio/mp4' : 'video/mp4');
+
     headers.set('Content-Type', contentType);
     headers.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-    
+
     const contentLength = mediaRes.headers.get('content-length');
     if (contentLength) {
       headers.set('Content-Length', contentLength);
@@ -68,9 +88,6 @@ export async function GET(request) {
     if (targetUrl && !targetUrl.includes('youtube.com')) {
       return NextResponse.redirect(targetUrl);
     }
-    return NextResponse.json(
-      { error: 'Failed to download media stream' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to download media' }, { status: 500 });
   }
 }
