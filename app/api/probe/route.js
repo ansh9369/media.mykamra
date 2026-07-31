@@ -3,7 +3,27 @@ import ytdl from '@distube/ytdl-core';
 import { spawn } from 'child_process';
 import path from 'path';
 
-// 1. Primary Node.js Extractor using @distube/ytdl-core (100% Vercel Serverless Compatible)
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL;
+
+// 1. Render Python Backend Proxy (If BACKEND_URL env is set)
+async function extractWithRenderBackend(url) {
+  if (!BACKEND_URL) return null;
+  try {
+    const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/probe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.error('Render backend extraction error:', err.message);
+    return null;
+  }
+}
+
+// 2. Primary Node.js Extractor using @distube/ytdl-core (Serverless Compatible)
 async function extractWithYtdlCore(url) {
   try {
     const info = await ytdl.getInfo(url, {
@@ -97,7 +117,7 @@ async function extractWithYtdlCore(url) {
   }
 }
 
-// 2. Local Python yt_dlp Extractor
+// 3. Local Python yt_dlp Extractor
 function runYtDlpPython(url) {
   return new Promise((resolve) => {
     const scriptPath = path.join(process.cwd(), 'lib', 'ytdlp.py');
@@ -129,7 +149,7 @@ function runYtDlpPython(url) {
   });
 }
 
-// 3. Fallback oEmbed metadata generator
+// 4. Fallback oEmbed metadata generator
 async function fetchOEmbedFallback(url, videoId) {
   try {
     const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
@@ -201,13 +221,19 @@ export async function POST(request) {
 
     if (!url || typeof url !== 'string' || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
       return NextResponse.json(
-        { success: false, error: 'Please enter a valid YouTube URL (e.g. https://www.youtube.com/watch?v=...)' },
+        { success: false, error: 'Please enter a valid YouTube URL' },
         { status: 400 }
       );
     }
 
     const match = url.match(/(?:v=|\/embed\/|\/144\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     const videoId = match ? match[1] : '';
+
+    // Step 0: Render Python Backend (If configured in Vercel Env)
+    const renderResult = await extractWithRenderBackend(url.trim());
+    if (renderResult && renderResult.success) {
+      return NextResponse.json(renderResult);
+    }
 
     // Step 1: Extract with @distube/ytdl-core (Fast & Serverless Native)
     const ytdlResult = await extractWithYtdlCore(url.trim());
