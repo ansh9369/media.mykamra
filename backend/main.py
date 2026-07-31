@@ -6,6 +6,7 @@ import yt_dlp
 import requests
 import urllib.parse
 import re
+import time
 
 app = FastAPI(title="MyKamra Media API")
 
@@ -23,6 +24,28 @@ class ProbeRequest(BaseModel):
 def extract_video_id(url: str) -> str:
     match = re.search(r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
     return match.group(1) if match else "6-60kFPNa6U"
+
+def get_direct_cdn_stream(video_id: str, is_audio: bool = False):
+    format_key = "mp3" if is_audio else "720"
+    try:
+        yt_url = f"https://www.youtube.com/watch?v={video_id}"
+        start_res = requests.get(f"https://loader.to/api/ajax/download.php?format={format_key}&url={urllib.parse.quote(yt_url)}", timeout=8)
+        if start_res.status_code == 200:
+            job_id = start_res.json().get("id")
+            if job_id:
+                for _ in range(8):
+                    time.sleep(0.8)
+                    prog_res = requests.get(f"https://loader.to/api/ajax/progress.php?id={job_id}", timeout=5)
+                    if prog_res.status_code == 200:
+                        d_url = prog_res.json().get("download_url")
+                        if d_url:
+                            head_res = requests.head(d_url, allow_redirects=False, timeout=5)
+                            if head_res.status_code in (301, 302) and head_res.headers.get("location"):
+                                return head_res.headers["location"]
+                            return d_url
+    except Exception as e:
+        print("CDN stream extraction error:", e)
+    return None
 
 @app.get("/")
 def root():
@@ -45,11 +68,6 @@ def probe_video(req: ProbeRequest):
         'ignoreerrors': True,
         'geo_bypass': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web']
-            }
-        }
     }
 
     try:
@@ -210,44 +228,18 @@ def probe_video(req: ProbeRequest):
     }
 
 @app.get("/api/download")
-def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4", resolution: str = ""):
+def download_stream(url: str = "", videoId: str = "", video_id: str = "", filename: str = "video.mp4", resolution: str = ""):
     target_url = url
-    vid = videoId or extract_video_id(target_url)
+    vid = videoId or video_id or extract_video_id(target_url)
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # If target_url is direct googlevideo CDN link, redirect directly to browser
+    # Step 1: Try resolving direct high-speed CDN MP4 stream URL
+    cdn_url = get_direct_cdn_stream(vid, is_audio)
+    if cdn_url:
+        return RedirectResponse(url=cdn_url)
+
+    # Step 2: Fallback to yt_dlp stream resolution if direct CDN stream is pending
     if target_url and "googlevideo.com" in target_url:
         return RedirectResponse(url=target_url)
-
-    # Use yt_dlp to extract genuine direct stream URL
-    if vid:
-        try:
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'nocheckcertificate': True,
-                'geo_bypass': True,
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'web']
-                    }
-                }
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
-                if info and info.get('formats'):
-                    fmts = info['formats']
-                    if is_audio:
-                        selected = next((f for f in fmts if f.get('vcodec') == 'none' and f.get('acodec') != 'none' and f.get('url')), None)
-                    else:
-                        selected = next((f for f in fmts if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url')), None)
-                    if not selected:
-                        selected = next((f for f in fmts if f.get('url')), None)
-                    if selected and selected.get('url'):
-                        return RedirectResponse(url=selected['url'])
-        except Exception as e:
-            print("yt_dlp download stream extraction error:", e)
 
     return JSONResponse(status_code=400, content={"error": "Media stream not available."})
