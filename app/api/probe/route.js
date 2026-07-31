@@ -3,7 +3,7 @@ import ytdl from '@distube/ytdl-core';
 import { spawn } from 'child_process';
 import path from 'path';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL;
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'http://localhost:5000';
 
 // 1. Render Python Backend Proxy (If BACKEND_URL env is set)
 async function extractWithRenderBackend(url) {

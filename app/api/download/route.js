@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import ytdl from '@distube/ytdl-core';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL;
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'http://localhost:5000';
 
 async function getConvertedDownloadUrl(videoId, resolution, isAudioOnly) {
   if (!videoId) return null;
