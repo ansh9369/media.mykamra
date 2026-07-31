@@ -8,7 +8,7 @@ export async function GET(request) {
   let targetUrl = searchParams.get('url');
   const title = searchParams.get('title') || 'video';
   const ext = searchParams.get('ext') || 'mp4';
-  const videoId = searchParams.get('videoId');
+  const videoId = searchParams.get('videoId') || '';
   const resolution = searchParams.get('resolution') || '';
 
   const isAudioOnly = resolution.toLowerCase().includes('audio') || ext === 'm4a' || ext === 'mp3';
@@ -16,13 +16,47 @@ export async function GET(request) {
   const filename = `${sanitizedTitle}.${ext}`;
 
   try {
-    // If Render Backend URL is configured, delegate download to Render backend
-    if (BACKEND_URL && targetUrl && !targetUrl.includes('googlevideo.com')) {
-      const renderDownloadUrl = `${BACKEND_URL.replace(/\/$/, '')}/api/download?url=${encodeURIComponent(targetUrl)}&filename=${encodeURIComponent(filename)}`;
+    // If Render Backend URL is configured, delegate download to Render backend for valid container compilation
+    if (BACKEND_URL && (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#')) {
+      const renderDownloadUrl = `${BACKEND_URL.replace(/\/$/, '')}/api/download?url=${encodeURIComponent(targetUrl || '')}&filename=${encodeURIComponent(filename)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(resolution)}`;
       return NextResponse.redirect(renderDownloadUrl);
     }
 
-    // If targetUrl is missing or points to a YouTube watch page, extract direct stream URL via ytdl-core
+    // High-speed loader engine fallback if targetUrl is YouTube watch page
+    if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
+      if (videoId) {
+        try {
+          const formatKey = isAudioOnly ? 'mp3' : (resolution.includes('720') ? '720' : '360');
+          const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+          const startRes = await fetch(`https://loader.to/api/ajax/download.php?format=${formatKey}&url=${encodeURIComponent(ytUrl)}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          });
+
+          if (startRes.ok) {
+            const startData = await startRes.json();
+            if (startData && startData.id) {
+              const jobId = startData.id;
+              for (let attempt = 0; attempt < 6; attempt++) {
+                await new Promise((r) => setTimeout(r, 800));
+                const progRes = await fetch(`https://loader.to/api/ajax/progress.php?id=${jobId}`, {
+                  headers: { 'User-Agent': 'Mozilla/5.0' },
+                });
+                if (progRes.ok) {
+                  const progData = await progRes.json();
+                  if (progData && progData.download_url) {
+                    return NextResponse.redirect(progData.download_url);
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Loader fallback error:', e.message);
+        }
+      }
+    }
+
+    // Secondary ytdl-core fallback
     if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
       if (videoId) {
         try {
@@ -46,13 +80,13 @@ export async function GET(request) {
       }
     }
 
-    // Fallback redirect if direct stream URL not available
+    // Safety fallback
     if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
       const fallbackWatchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : 'https://www.youtube.com';
       return NextResponse.redirect(fallbackWatchUrl);
     }
 
-    // Fetch the direct stream from googlevideo CDN
+    // Fetch the stream
     const mediaRes = await fetch(targetUrl, {
       headers: {
         'User-Agent':
@@ -83,9 +117,6 @@ export async function GET(request) {
     });
   } catch (err) {
     console.error('Download route error:', err);
-    if (targetUrl && !targetUrl.includes('youtube.com')) {
-      return NextResponse.redirect(targetUrl);
-    }
     const fallbackWatchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : 'https://www.youtube.com';
     return NextResponse.redirect(fallbackWatchUrl);
   }
