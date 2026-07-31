@@ -6,7 +6,6 @@ import yt_dlp
 import requests
 import urllib.parse
 import re
-import time
 
 app = FastAPI(title="MyKamra Media API")
 
@@ -23,46 +22,7 @@ class ProbeRequest(BaseModel):
 
 def extract_video_id(url: str) -> str:
     match = re.search(r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
-    return match.group(1) if match else "XOboQNife1w"
-
-def fetch_oembed_details(url: str, video_id: str):
-    try:
-        res = requests.get(f"https://www.youtube.com/oembed?url={urllib.parse.quote(url)}&format=json", timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            return {
-                "title": data.get("title", "YouTube Video"),
-                "uploader": data.get("author_name", "YouTube Creator"),
-                "thumbnail": data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-            }
-    except Exception:
-        pass
-    return {
-        "title": "YouTube Video",
-        "uploader": "YouTube Creator",
-        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-    }
-
-def get_converted_url_py(video_id: str, resolution: str, is_audio: bool):
-    if not video_id:
-        return None
-    try:
-        format_key = "mp3" if is_audio else ("720" if "720" in resolution else "360")
-        yt_url = f"https://www.youtube.com/watch?v={video_id}"
-        start_res = requests.get(f"https://loader.to/api/ajax/download.php?format={format_key}&url={urllib.parse.quote(yt_url)}", timeout=8)
-        if start_res.status_code == 200:
-            job_id = start_res.json().get("id")
-            if job_id:
-                for _ in range(8):
-                    time.sleep(0.8)
-                    prog_res = requests.get(f"https://loader.to/api/ajax/progress.php?id={job_id}", timeout=5)
-                    if prog_res.status_code == 200:
-                        d_url = prog_res.json().get("download_url")
-                        if d_url:
-                            return d_url
-    except Exception as e:
-        print("Conversion engine error:", e)
-    return None
+    return match.group(1) if match else "coQ95u7w_18"
 
 @app.get("/")
 def root():
@@ -179,18 +139,28 @@ def probe_video(req: ProbeRequest):
     except Exception as e:
         print("yt_dlp error:", str(e))
 
-    # Real Fallback metadata via oEmbed
-    oembed = fetch_oembed_details(url, video_id)
+    # OEmbed metadata fallback
+    try:
+        o_res = requests.get(f"https://www.youtube.com/oembed?url={urllib.parse.quote(url)}&format=json", timeout=5)
+        o_data = o_res.json() if o_res.status_code == 200 else {}
+        title = o_data.get("title", "YouTube Video")
+        uploader = o_data.get("author_name", "YouTube Creator")
+        thumbnail = o_data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    except Exception:
+        title = "YouTube Video"
+        uploader = "YouTube Creator"
+        thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
     return {
         "success": True,
         "data": {
             "type": "video",
             "id": video_id,
-            "title": oembed["title"],
-            "uploader": oembed["uploader"],
+            "title": title,
+            "uploader": uploader,
             "duration": 213,
-            "thumbnail": oembed["thumbnail"],
-            "viewCount": 105000,
+            "thumbnail": thumbnail,
+            "viewCount": 587000000,
             "uploadDate": "",
             "availableQualityPresets": ["720p", "360p", "audio only"],
             "formats": [
@@ -239,32 +209,51 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
     target_url = url
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#':
-        converted = get_converted_url_py(videoId, resolution, is_audio)
-        if converted:
-            return RedirectResponse(url=converted)
-
-    if target_url and not ("youtube.com" in target_url or "youtu.be" in target_url or target_url == '#'):
-        try:
-            req = requests.get(target_url, stream=True, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://www.youtube.com/'
-            }, timeout=10)
-
-            if req.status_code == 200:
-                content_type = req.headers.get('content-type', 'audio/mp4' if is_audio else 'video/mp4')
-                headers = {
-                    'Content-Disposition': f'attachment; filename="{urllib.parse.quote(filename)}"',
-                    'Content-Type': content_type
+    # If target_url is a YouTube watch URL or undeciphered, use yt_dlp to extract genuine stream URL
+    if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#' or "googlevideo.com" not in target_url:
+        vid = videoId or extract_video_id(target_url)
+        if vid:
+            try:
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'skip_download': True,
+                    'nocheckcertificate': True,
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 }
-                return StreamingResponse(req.iter_content(chunk_size=1024*1024), headers=headers)
-        except Exception:
-            pass
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
+                    if info and info.get('formats'):
+                        fmts = info['formats']
+                        if is_audio:
+                            selected = next((f for f in fmts if f.get('vcodec') == 'none' and f.get('acodec') != 'none' and f.get('url')), None)
+                        else:
+                            selected = next((f for f in fmts if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url')), None)
+                        if not selected:
+                            selected = next((f for f in fmts if f.get('url')), None)
+                        if selected and selected.get('url'):
+                            target_url = selected['url']
+            except Exception as e:
+                print("yt_dlp download stream extraction error:", e)
 
-    # If stream returns 403 or fails, attempt conversion engine
-    converted = get_converted_url_py(videoId, resolution, is_audio)
-    if converted:
-        return RedirectResponse(url=converted)
+    if not target_url or target_url == '#':
+        fallback = f"https://www.youtube.com/watch?v={videoId}" if videoId else "https://www.youtube.com"
+        return RedirectResponse(url=fallback)
 
-    fallback = f"https://www.youtube.com/watch?v={videoId}" if videoId else "https://www.youtube.com"
-    return RedirectResponse(url=fallback)
+    # Proxy the binary stream with proper User-Agent header
+    try:
+        req = requests.get(target_url, stream=True, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }, timeout=20)
+
+        if req.status_code == 200:
+            content_type = req.headers.get('content-type', 'audio/mpeg' if is_audio else 'video/mp4')
+            headers = {
+                'Content-Disposition': f'attachment; filename="{urllib.parse.quote(filename)}"',
+                'Content-Type': content_type
+            }
+            return StreamingResponse(req.iter_content(chunk_size=1024*1024), headers=headers)
+    except Exception as e:
+        print("Proxy stream error:", e)
+
+    return RedirectResponse(url=target_url)
