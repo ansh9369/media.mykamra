@@ -1,15 +1,54 @@
 import { NextResponse } from 'next/server';
 import ytdl from '@distube/ytdl-core';
 
+async function getY2MateStreamUrl(vid, isAudioOnly) {
+  try {
+    const res = await fetch('https://www.y2mate.com/mates/analyzeV2/ajax', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+      body: `url=${encodeURIComponent('https://www.youtube.com/watch?v=' + vid)}&q_auto=0&ajax=1`,
+      next: { revalidate: 0 },
+    });
+    const data = await res.json();
+    const targetGroup = isAudioOnly ? (data?.links?.mp3 || data?.links?.mp4) : (data?.links?.mp4 || data?.links?.mp3);
+
+    if (targetGroup) {
+      const keys = Object.keys(targetGroup);
+      if (keys.length > 0) {
+        const kVal = targetGroup[keys[0]]?.k;
+        if (kVal) {
+          const cRes = await fetch('https://www.y2mate.com/mates/convertV2/index', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+            body: `vid=${encodeURIComponent(vid)}&k=${encodeURIComponent(kVal)}`,
+            next: { revalidate: 0 },
+          });
+          const cData = await cRes.json();
+          if (cData?.dlink) {
+            return cData.dlink;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('getY2MateStreamUrl error:', err.message);
+  }
+  return null;
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   let targetUrl = searchParams.get('url');
-  const title = searchParams.get('title') || 'media';
-  const ext = searchParams.get('ext') || 'mp4';
-  const videoId = searchParams.get('videoId') || '';
+  const videoId = searchParams.get('videoId') || searchParams.get('videoid') || '';
   const resolution = searchParams.get('resolution') || '';
 
-  const isAudioOnly = resolution.toLowerCase().includes('audio') || ext === 'm4a' || ext === 'mp3';
+  const isAudioOnly = resolution.toLowerCase().includes('audio');
   let vid = videoId;
   if (!vid && targetUrl) {
     try {
@@ -47,8 +86,12 @@ export async function GET(request) {
     console.error('Node ytdl-core extraction error:', err.message);
   }
 
-  // 2. Fallback to Python Backend if configured
-  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'http://localhost:5000';
-  const renderDownloadUrl = `${BACKEND_URL.replace(/\/$/, '')}/api/download?videoId=${encodeURIComponent(vid)}&resolution=${encodeURIComponent(resolution)}`;
-  return NextResponse.redirect(renderDownloadUrl);
+  // 2. High-Speed Fallback Engine via Y2Mate API
+  const y2mateDlink = await getY2MateStreamUrl(vid, isAudioOnly);
+  if (y2mateDlink) {
+    return NextResponse.redirect(y2mateDlink);
+  }
+
+  // 3. Final Fallback: Direct YouTube Watch URL (Never show raw 400 JSON error page to user)
+  return NextResponse.redirect(`https://www.youtube.com/watch?v=${vid}`);
 }
