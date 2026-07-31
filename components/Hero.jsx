@@ -537,8 +537,18 @@ export default function Hero() {
 
       const downloadApiUrl = `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${encodeURIComponent(ext)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(format.resolution)}`;
 
-      // Native browser top-level location download (bypasses CORS restrictions)
-      window.location.href = downloadApiUrl;
+      // Trigger native browser download using hidden anchor element without page navigation
+      const anchor = document.createElement('a');
+      anchor.style.display = 'none';
+      anchor.href = downloadApiUrl;
+      anchor.setAttribute('download', `${title.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'media'}.${ext}`);
+      document.body.appendChild(anchor);
+      anchor.click();
+      setTimeout(() => {
+        if (document.body.contains(anchor)) {
+          document.body.removeChild(anchor);
+        }
+      }, 300);
     } catch (err) {
       console.error('Download error:', err);
     } finally {

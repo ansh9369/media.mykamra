@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
 import yt_dlp
 import requests
@@ -209,7 +209,7 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
     target_url = url
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # If target_url is a YouTube watch URL or undeciphered, use yt_dlp to extract genuine stream URL
+    # Extract genuine stream URL via yt_dlp
     if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#' or "googlevideo.com" not in target_url:
         vid = videoId or extract_video_id(target_url)
         if vid:
@@ -236,24 +236,20 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
             except Exception as e:
                 print("yt_dlp download stream extraction error:", e)
 
-    if not target_url or target_url == '#':
-        fallback = f"https://www.youtube.com/watch?v={videoId}" if videoId else "https://www.youtube.com"
-        return RedirectResponse(url=fallback)
+    if target_url and not ("youtube.com" in target_url or "youtu.be" in target_url or target_url == '#'):
+        try:
+            req = requests.get(target_url, stream=True, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            }, timeout=20)
 
-    # Proxy the binary stream with proper User-Agent header
-    try:
-        req = requests.get(target_url, stream=True, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        }, timeout=20)
+            if req.status_code == 200:
+                content_type = req.headers.get('content-type', 'audio/mpeg' if is_audio else 'video/mp4')
+                headers = {
+                    'Content-Disposition': f'attachment; filename="{urllib.parse.quote(filename)}"',
+                    'Content-Type': content_type
+                }
+                return StreamingResponse(req.iter_content(chunk_size=1024*1024), headers=headers)
+        except Exception as e:
+            print("Proxy stream error:", e)
 
-        if req.status_code == 200:
-            content_type = req.headers.get('content-type', 'audio/mpeg' if is_audio else 'video/mp4')
-            headers = {
-                'Content-Disposition': f'attachment; filename="{urllib.parse.quote(filename)}"',
-                'Content-Type': content_type
-            }
-            return StreamingResponse(req.iter_content(chunk_size=1024*1024), headers=headers)
-    except Exception as e:
-        print("Proxy stream error:", e)
-
-    return RedirectResponse(url=target_url)
+    return JSONResponse(status_code=500, content={"error": "Media stream unavailable. Please check the video link and try again."})

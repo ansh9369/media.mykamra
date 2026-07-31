@@ -102,12 +102,16 @@ export async function GET(request) {
       return NextResponse.redirect(fallbackConvertedUrl);
     }
 
-    // 5. Final safety watch fallback
-    const fallbackWatchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : 'https://www.youtube.com';
-    return NextResponse.redirect(fallbackWatchUrl);
+    // Never redirect to youtube.com; return clean JSON error instead
+    return NextResponse.json(
+      { error: 'Media stream unavailable. Please check the video link and try again.' },
+      { status: 500 }
+    );
   } catch (err) {
     console.error('Download route error:', err);
-    const fallbackWatchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : 'https://www.youtube.com';
-    return NextResponse.redirect(fallbackWatchUrl);
+    return NextResponse.json(
+      { error: 'Failed to process media download request.' },
+      { status: 500 }
+    );
   }
 }
