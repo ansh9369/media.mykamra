@@ -6,6 +6,7 @@ import yt_dlp
 import requests
 import urllib.parse
 import re
+import time
 
 app = FastAPI(title="MyKamra Media API")
 
@@ -22,7 +23,26 @@ class ProbeRequest(BaseModel):
 
 def extract_video_id(url: str) -> str:
     match = re.search(r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
-    return match.group(1) if match else "coQ95u7w_18"
+    return match.group(1) if match else "6-60kFPNa6U"
+
+def get_real_stream_url(video_id: str, is_audio: bool = False):
+    format_key = "mp3" if is_audio else "720"
+    try:
+        yt_url = f"https://www.youtube.com/watch?v={video_id}"
+        start_res = requests.get(f"https://loader.to/api/ajax/download.php?format={format_key}&url={urllib.parse.quote(yt_url)}", timeout=8)
+        if start_res.status_code == 200:
+            job_id = start_res.json().get("id")
+            if job_id:
+                for _ in range(6):
+                    time.sleep(0.8)
+                    prog_res = requests.get(f"https://loader.to/api/ajax/progress.php?id={job_id}", timeout=5)
+                    if prog_res.status_code == 200:
+                        d_url = prog_res.json().get("download_url")
+                        if d_url:
+                            return d_url
+    except Exception as e:
+        print("Stream resolution error:", e)
+    return None
 
 @app.get("/")
 def root():
@@ -45,6 +65,11 @@ def probe_video(req: ProbeRequest):
         'ignoreerrors': True,
         'geo_bypass': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web', 'mweb']
+            }
+        }
     }
 
     try:
@@ -137,9 +162,9 @@ def probe_video(req: ProbeRequest):
                     }
                 }
     except Exception as e:
-        print("yt_dlp error:", str(e))
+        print("yt_dlp probe error:", str(e))
 
-    # OEmbed metadata fallback
+    # Real Fallback metadata & stream resolution
     try:
         o_res = requests.get(f"https://www.youtube.com/oembed?url={urllib.parse.quote(url)}&format=json", timeout=5)
         o_data = o_res.json() if o_res.status_code == 200 else {}
@@ -150,6 +175,9 @@ def probe_video(req: ProbeRequest):
         title = "YouTube Video"
         uploader = "YouTube Creator"
         thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+    v_stream = get_real_stream_url(video_id, is_audio=False) or f"https://www.youtube.com/watch?v={video_id}"
+    a_stream = get_real_stream_url(video_id, is_audio=True) or f"https://www.youtube.com/watch?v={video_id}"
 
     return {
         "success": True,
@@ -174,7 +202,7 @@ def probe_video(req: ProbeRequest):
                     "playableAsIs": True,
                     "filesizeApprox": 45000000,
                     "note": "720p HD (Video+Audio)",
-                    "downloadUrl": f"https://www.youtube.com/watch?v={video_id}"
+                    "downloadUrl": v_stream
                 },
                 {
                     "formatId": "360p_mp4",
@@ -186,7 +214,7 @@ def probe_video(req: ProbeRequest):
                     "playableAsIs": True,
                     "filesizeApprox": 18000000,
                     "note": "360p SD (Video+Audio)",
-                    "downloadUrl": f"https://www.youtube.com/watch?v={video_id}"
+                    "downloadUrl": v_stream
                 },
                 {
                     "formatId": "audio_m4a",
@@ -198,7 +226,7 @@ def probe_video(req: ProbeRequest):
                     "playableAsIs": False,
                     "filesizeApprox": 5000000,
                     "note": "Audio Only",
-                    "downloadUrl": f"https://www.youtube.com/watch?v={video_id}"
+                    "downloadUrl": a_stream
                 }
             ]
         }
@@ -209,50 +237,13 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
     target_url = url
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # Extract genuine stream URL via yt_dlp if missing or YouTube watch link
-    if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#' or "googlevideo.com" not in target_url:
+    # If target_url is missing or a watch page, resolve direct stream
+    if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#':
         vid = videoId or extract_video_id(target_url)
         if vid:
-            try:
-                ydl_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'skip_download': True,
-                    'nocheckcertificate': True,
-                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
-                    if info and info.get('formats'):
-                        fmts = info['formats']
-                        if is_audio:
-                            selected = next((f for f in fmts if f.get('vcodec') == 'none' and f.get('acodec') != 'none' and f.get('url')), None)
-                        else:
-                            selected = next((f for f in fmts if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url')), None)
-                        if not selected:
-                            selected = next((f for f in fmts if f.get('url')), None)
-                        if selected and selected.get('url'):
-                            target_url = selected['url']
-            except Exception as e:
-                print("yt_dlp download stream extraction error:", e)
+            target_url = get_real_stream_url(vid, is_audio)
 
-    if target_url and "googlevideo.com" in target_url:
-        try:
-            req = requests.get(target_url, stream=True, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            }, timeout=15)
-
-            if req.status_code == 200:
-                content_type = req.headers.get('content-type', 'audio/mpeg' if is_audio else 'video/mp4')
-                headers = {
-                    'Content-Disposition': f'attachment; filename="{urllib.parse.quote(filename)}"',
-                    'Content-Type': content_type
-                }
-                return StreamingResponse(req.iter_content(chunk_size=1024*1024), headers=headers)
-        except Exception as e:
-            print("Proxy stream error:", e)
-
-        # Direct browser redirect to stream URL as fallback when Render datacenter IP is throttled
+    if target_url and target_url != '#' and "youtube.com" not in target_url:
         return RedirectResponse(url=target_url)
 
-    return JSONResponse(status_code=400, content={"error": "Media stream link not available."})
+    return JSONResponse(status_code=400, content={"error": "Media stream not available."})
