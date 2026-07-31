@@ -6,6 +6,7 @@ import yt_dlp
 import requests
 import urllib.parse
 import re
+import time
 
 app = FastAPI(title="MyKamra Media API")
 
@@ -41,6 +42,27 @@ def fetch_oembed_details(url: str, video_id: str):
         "uploader": "YouTube Creator",
         "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
     }
+
+def get_converted_url_py(video_id: str, resolution: str, is_audio: bool):
+    if not video_id:
+        return None
+    try:
+        format_key = "mp3" if is_audio else ("720" if "720" in resolution else "360")
+        yt_url = f"https://www.youtube.com/watch?v={video_id}"
+        start_res = requests.get(f"https://loader.to/api/ajax/download.php?format={format_key}&url={urllib.parse.quote(yt_url)}", timeout=8)
+        if start_res.status_code == 200:
+            job_id = start_res.json().get("id")
+            if job_id:
+                for _ in range(8):
+                    time.sleep(0.8)
+                    prog_res = requests.get(f"https://loader.to/api/ajax/progress.php?id={job_id}", timeout=5)
+                    if prog_res.status_code == 200:
+                        d_url = prog_res.json().get("download_url")
+                        if d_url:
+                            return d_url
+    except Exception as e:
+        print("Conversion engine error:", e)
+    return None
 
 @app.get("/")
 def root():
@@ -83,7 +105,6 @@ def probe_video(req: ProbeRequest):
             processed_formats = []
             seen = set()
 
-            # Separate combined (video+audio), audio-only, and video-only formats
             for f in raw_formats:
                 if not f.get('url'):
                     continue
@@ -116,8 +137,6 @@ def probe_video(req: ProbeRequest):
 
                 ext = f.get('ext', 'mp4')
                 format_id = str(f.get('format_id', ''))
-                
-                # Prioritize combined video+audio formats so files play natively in Windows Media Player
                 key = f"{resolution}_{ext}_{has_video}_{has_audio}"
                 if key in seen:
                     continue
@@ -126,7 +145,6 @@ def probe_video(req: ProbeRequest):
                 filesize = f.get('filesize') or f.get('filesize_approx') or 0
                 url_download = f.get('url') or '#'
 
-                # If format has video but no audio, tag it for proxy download
                 processed_formats.append({
                     "formatId": format_id,
                     "ext": ext,
@@ -141,7 +159,6 @@ def probe_video(req: ProbeRequest):
                 })
 
             if processed_formats:
-                # Order formats: combined first, then audio
                 processed_formats.sort(key=lambda x: (not x['hasAudio'], not x['hasVideo']))
                 presets = list(set(fmt['resolution'] for fmt in processed_formats))
                 return {
@@ -222,44 +239,32 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
     target_url = url
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # If target_url is a YouTube watch URL or not direct, resolve stream via loader engine
     if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#':
-        if videoId:
-            try:
-                format_key = "mp3" if is_audio else ("720" if "720" in resolution else "360")
-                yt_url = f"https://www.youtube.com/watch?v={videoId}"
-                start_res = requests.get(f"https://loader.to/api/ajax/download.php?format={format_key}&url={urllib.parse.quote(yt_url)}", timeout=8)
-                if start_res.status_code == 200:
-                    job_id = start_res.json().get("id")
-                    if job_id:
-                        import time
-                        for _ in range(6):
-                            time.sleep(0.8)
-                            prog_res = requests.get(f"https://loader.to/api/ajax/progress.php?id={job_id}", timeout=5)
-                            if prog_res.status_code == 200:
-                                d_url = prog_res.json().get("download_url")
-                                if d_url:
-                                    return RedirectResponse(url=d_url)
-            except Exception as e:
-                print("Loader engine error:", e)
+        converted = get_converted_url_py(videoId, resolution, is_audio)
+        if converted:
+            return RedirectResponse(url=converted)
 
-    if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#':
-        fallback = f"https://www.youtube.com/watch?v={videoId}" if videoId else "https://www.youtube.com"
-        return RedirectResponse(url=fallback)
+    if target_url and not ("youtube.com" in target_url or "youtu.be" in target_url or target_url == '#'):
+        try:
+            req = requests.get(target_url, stream=True, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://www.youtube.com/'
+            }, timeout=10)
 
-    try:
-        req = requests.get(target_url, stream=True, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }, timeout=15)
+            if req.status_code == 200:
+                content_type = req.headers.get('content-type', 'audio/mp4' if is_audio else 'video/mp4')
+                headers = {
+                    'Content-Disposition': f'attachment; filename="{urllib.parse.quote(filename)}"',
+                    'Content-Type': content_type
+                }
+                return StreamingResponse(req.iter_content(chunk_size=1024*1024), headers=headers)
+        except Exception:
+            pass
 
-        if req.status_code != 200:
-            return RedirectResponse(url=target_url)
+    # If stream returns 403 or fails, attempt conversion engine
+    converted = get_converted_url_py(videoId, resolution, is_audio)
+    if converted:
+        return RedirectResponse(url=converted)
 
-        content_type = req.headers.get('content-type', 'audio/mp4' if is_audio else 'video/mp4')
-        headers = {
-            'Content-Disposition': f'attachment; filename="{urllib.parse.quote(filename)}"',
-            'Content-Type': content_type
-        }
-        return StreamingResponse(req.iter_content(chunk_size=1024*1024), headers=headers)
-    except Exception:
-        return RedirectResponse(url=target_url)
+    fallback = f"https://www.youtube.com/watch?v={videoId}" if videoId else "https://www.youtube.com"
+    return RedirectResponse(url=fallback)
