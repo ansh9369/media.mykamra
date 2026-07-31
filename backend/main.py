@@ -209,7 +209,7 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
     target_url = url
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # Extract genuine stream URL via yt_dlp
+    # Extract genuine stream URL via yt_dlp if missing or YouTube watch link
     if not target_url or "youtube.com" in target_url or "youtu.be" in target_url or target_url == '#' or "googlevideo.com" not in target_url:
         vid = videoId or extract_video_id(target_url)
         if vid:
@@ -236,11 +236,11 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
             except Exception as e:
                 print("yt_dlp download stream extraction error:", e)
 
-    if target_url and not ("youtube.com" in target_url or "youtu.be" in target_url or target_url == '#'):
+    if target_url and "googlevideo.com" in target_url:
         try:
             req = requests.get(target_url, stream=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            }, timeout=20)
+            }, timeout=15)
 
             if req.status_code == 200:
                 content_type = req.headers.get('content-type', 'audio/mpeg' if is_audio else 'video/mp4')
@@ -252,4 +252,7 @@ def download_stream(url: str = "", videoId: str = "", filename: str = "video.mp4
         except Exception as e:
             print("Proxy stream error:", e)
 
-    return JSONResponse(status_code=500, content={"error": "Media stream unavailable. Please check the video link and try again."})
+        # Direct browser redirect to stream URL as fallback when Render datacenter IP is throttled
+        return RedirectResponse(url=target_url)
+
+    return JSONResponse(status_code=400, content={"error": "Media stream link not available."})
