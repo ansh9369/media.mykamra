@@ -67,7 +67,7 @@ def probe_video(req: ProbeRequest):
         'nocheckcertificate': True,
         'ignoreerrors': True,
         'geo_bypass': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'format': 'best',
     }
 
     try:
@@ -231,15 +231,28 @@ def probe_video(req: ProbeRequest):
 def download_stream(url: str = "", videoId: str = "", video_id: str = "", filename: str = "video.mp4", resolution: str = ""):
     target_url = url
     vid = videoId or video_id or extract_video_id(target_url)
-    is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # Step 1: Try resolving direct high-speed CDN MP4 stream URL
-    cdn_url = get_direct_cdn_stream(vid, is_audio)
+    if vid:
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+                'nocheckcertificate': True,
+                'format': 'best',
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
+                if info:
+                    stream_url = info.get('url') or (info.get('formats') and info['formats'][0].get('url'))
+                    if stream_url:
+                        return RedirectResponse(url=stream_url)
+        except Exception as e:
+            print("yt_dlp stream error:", e)
+
+    # Secondary CDN fallback
+    cdn_url = get_direct_cdn_stream(vid, "audio" in resolution.lower())
     if cdn_url:
         return RedirectResponse(url=cdn_url)
-
-    # Step 2: Fallback to yt_dlp stream resolution if direct CDN stream is pending
-    if target_url and "googlevideo.com" in target_url:
-        return RedirectResponse(url=target_url)
 
     return JSONResponse(status_code=400, content={"error": "Media stream not available."})
