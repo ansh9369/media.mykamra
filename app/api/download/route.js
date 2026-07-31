@@ -55,18 +55,18 @@ export async function GET(request) {
   const filename = `${sanitizedTitle}.${ext}`;
 
   try {
-    // 1. Check High-Speed Conversion Engine first if targetUrl is YouTube page or missing
+    // 1. Delegate to Render Backend if configured (always reliable)
+    if (BACKEND_URL) {
+      const renderDownloadUrl = `${BACKEND_URL.replace(/\/$/, '')}/api/download?url=${encodeURIComponent(targetUrl || '')}&filename=${encodeURIComponent(filename)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(resolution)}`;
+      return NextResponse.redirect(renderDownloadUrl);
+    }
+
+    // 2. High-Speed Conversion Engine if targetUrl is YouTube page or missing
     if (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#') {
       const convertedUrl = await getConvertedDownloadUrl(videoId, resolution, isAudioOnly);
       if (convertedUrl) {
         return NextResponse.redirect(convertedUrl);
       }
-    }
-
-    // 2. Delegate to Render Backend if configured
-    if (BACKEND_URL && (!targetUrl || targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be') || targetUrl === '#')) {
-      const renderDownloadUrl = `${BACKEND_URL.replace(/\/$/, '')}/api/download?url=${encodeURIComponent(targetUrl || '')}&filename=${encodeURIComponent(filename)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(resolution)}`;
-      return NextResponse.redirect(renderDownloadUrl);
     }
 
     // 3. Try fetching targetUrl stream
@@ -96,13 +96,13 @@ export async function GET(request) {
       }
     }
 
-    // 4. If targetUrl returned 403 Forbidden or failed, attempt conversion engine
+    // 4. Fallback conversion engine
     const fallbackConvertedUrl = await getConvertedDownloadUrl(videoId, resolution, isAudioOnly);
     if (fallbackConvertedUrl) {
       return NextResponse.redirect(fallbackConvertedUrl);
     }
 
-    // 5. Final fallback
+    // 5. Final safety watch fallback
     const fallbackWatchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : 'https://www.youtube.com';
     return NextResponse.redirect(fallbackWatchUrl);
   } catch (err) {
