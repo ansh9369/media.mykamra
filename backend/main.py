@@ -6,7 +6,6 @@ import yt_dlp
 import requests
 import urllib.parse
 import re
-import time
 
 app = FastAPI(title="MyKamra Media API")
 
@@ -25,26 +24,35 @@ def extract_video_id(url: str) -> str:
     match = re.search(r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
     return match.group(1) if match else "6-60kFPNa6U"
 
-def get_direct_cdn_stream(video_id: str, is_audio: bool = False):
-    format_key = "mp3" if is_audio else "720"
+def get_y2mate_dlink(video_id: str, is_audio: bool = False):
     try:
-        yt_url = f"https://www.youtube.com/watch?v={video_id}"
-        start_res = requests.get(f"https://loader.to/api/ajax/download.php?format={format_key}&url={urllib.parse.quote(yt_url)}", timeout=8)
-        if start_res.status_code == 200:
-            job_id = start_res.json().get("id")
-            if job_id:
-                for _ in range(8):
-                    time.sleep(0.8)
-                    prog_res = requests.get(f"https://loader.to/api/ajax/progress.php?id={job_id}", timeout=5)
-                    if prog_res.status_code == 200:
-                        d_url = prog_res.json().get("download_url")
-                        if d_url:
-                            head_res = requests.head(d_url, allow_redirects=False, timeout=5)
-                            if head_res.status_code in (301, 302) and head_res.headers.get("location"):
-                                return head_res.headers["location"]
-                            return d_url
+        res = requests.post(
+            'https://www.y2mate.com/mates/analyzeV2/ajax',
+            data={'url': f'https://www.youtube.com/watch?v={video_id}', 'q_auto': 0, 'ajax': 1},
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+            timeout=6
+        ).json()
+
+        links = res.get('links', {})
+        target_group = links.get('mp3', {}) if is_audio else links.get('mp4', {})
+        if not target_group:
+            target_group = links.get('mp4', {}) or links.get('mp3', {})
+
+        if target_group:
+            first_val = list(target_group.values())[0]
+            k_val = first_val.get('k')
+            if k_val:
+                c_res = requests.post(
+                    'https://www.y2mate.com/mates/convertV2/index',
+                    data={'vid': video_id, 'k': k_val},
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+                    timeout=6
+                ).json()
+                dlink = c_res.get('dlink')
+                if dlink:
+                    return dlink
     except Exception as e:
-        print("CDN stream extraction error:", e)
+        print("Y2mate resolution error:", e)
     return None
 
 @app.get("/")
@@ -82,7 +90,6 @@ def probe_video(req: ProbeRequest):
             duration = info.get('duration') or 0
             thumbnail = info.get('thumbnail') or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
             view_count = info.get('view_count') or 0
-            upload_date = info.get('upload_date') or ''
 
             raw_formats = info.get('formats', [])
             processed_formats = []
@@ -154,7 +161,6 @@ def probe_video(req: ProbeRequest):
                         "duration": duration,
                         "thumbnail": thumbnail,
                         "viewCount": view_count,
-                        "uploadDate": upload_date,
                         "availableQualityPresets": presets,
                         "formats": processed_formats
                     }
@@ -184,7 +190,6 @@ def probe_video(req: ProbeRequest):
             "duration": 213,
             "thumbnail": thumbnail,
             "viewCount": 587000000,
-            "uploadDate": "",
             "availableQualityPresets": ["720p", "360p", "audio only"],
             "formats": [
                 {
@@ -231,28 +236,15 @@ def probe_video(req: ProbeRequest):
 def download_stream(url: str = "", videoId: str = "", video_id: str = "", filename: str = "video.mp4", resolution: str = ""):
     target_url = url
     vid = videoId or video_id or extract_video_id(target_url)
+    is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    if vid:
-        try:
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'nocheckcertificate': True,
-                'format': 'best',
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
-                if info:
-                    stream_url = info.get('url') or (info.get('formats') and info['formats'][0].get('url'))
-                    if stream_url:
-                        return RedirectResponse(url=stream_url)
-        except Exception as e:
-            print("yt_dlp stream error:", e)
+    # High-Speed direct CDN MP4 resolution
+    y2_dlink = get_y2mate_dlink(vid, is_audio)
+    if y2_dlink:
+        return RedirectResponse(url=y2_dlink)
 
-    # Secondary CDN fallback
-    cdn_url = get_direct_cdn_stream(vid, "audio" in resolution.lower())
-    if cdn_url:
-        return RedirectResponse(url=cdn_url)
+    # Backup stream redirect
+    if target_url and "googlevideo.com" in target_url:
+        return RedirectResponse(url=target_url)
 
     return JSONResponse(status_code=400, content={"error": "Media stream not available."})
