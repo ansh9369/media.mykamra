@@ -48,6 +48,11 @@ export async function GET(request) {
   const videoId = searchParams.get('videoId') || searchParams.get('videoid') || '';
   const resolution = searchParams.get('resolution') || '';
 
+  // 0. Instant Direct Stream Redirect if targetUrl is already a resolved media stream URL
+  if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a') || targetUrl.includes('loader.to'))) {
+    return NextResponse.redirect(targetUrl);
+  }
+
   const isAudioOnly = resolution.toLowerCase().includes('audio');
   let vid = videoId;
   if (!vid && targetUrl) {
@@ -92,6 +97,6 @@ export async function GET(request) {
     return NextResponse.redirect(y2mateDlink);
   }
 
-  // 3. Final Fallback: Direct YouTube Watch URL (Never show raw 400 JSON error page to user)
+  // 3. Final Fallback: Direct YouTube Watch URL
   return NextResponse.redirect(`https://www.youtube.com/watch?v=${vid}`);
 }
