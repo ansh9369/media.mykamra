@@ -126,10 +126,10 @@ export async function GET(request) {
       return NextResponse.redirect(y2mateDlink);
     }
 
-    // 4. Reliable 1-Click Downloader Redirect (Opens instant video/audio downloader instead of YouTube watch page)
-    return NextResponse.redirect(`https://www.youtubepp.com/watch?v=${vid}`);
+    // 4. Reliable 1-Click Downloader Redirect (ssyoutube / SaveFrom fallback)
+    return NextResponse.redirect(`https://ssyoutube.com/watch?v=${vid}`);
   }
 
-  return NextResponse.redirect('https://www.youtubepp.com');
+  return NextResponse.redirect('https://ssyoutube.com');
 }
 
