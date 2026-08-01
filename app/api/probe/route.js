@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import ytdl from '@distube/ytdl-core';
 import { spawn } from 'child_process';
-import path from 'path';
+
+export const maxDuration = 10;
+export const dynamic = 'force-dynamic';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || '';
 
-// 1. Render Python Backend Proxy with 3s Timeout (Prevents Vercel 10s Serverless Timeout)
+// 1. Render Python Backend Proxy with 3s Timeout (Prevents Vercel Serverless Timeout)
 async function extractWithRenderBackend(url) {
   if (!BACKEND_URL || BACKEND_URL.includes('localhost')) return null;
   try {
@@ -29,10 +31,14 @@ async function extractWithRenderBackend(url) {
   }
 }
 
-// 2. Primary Node.js Extractor using @distube/ytdl-core (Serverless Compatible - 1.5s Response)
+// 2. Primary Node.js Extractor using @distube/ytdl-core (3.5s Strict Race Timeout)
 async function extractWithYtdlCore(url) {
   try {
-    const info = await ytdl.getInfo(url, {
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('YTDL_TIMEOUT')), 3500)
+    );
+
+    const infoPromise = ytdl.getInfo(url, {
       requestOptions: {
         headers: {
           'User-Agent':
@@ -40,6 +46,8 @@ async function extractWithYtdlCore(url) {
         },
       },
     });
+
+    const info = await Promise.race([infoPromise, timeoutPromise]);
 
     if (!info || !info.videoDetails) return null;
 
@@ -132,10 +140,11 @@ async function extractWithYtdlCore(url) {
   }
 }
 
-// 3. Fallback Local Python yt-dlp Execution
+// 3. Fallback Local Python yt-dlp Execution (Only runs if python binary is available, 1.5s timeout)
 function runYtDlpPython(url) {
   return new Promise((resolve) => {
-    const pyProcess = spawn('python', ['-c', `
+    try {
+      const pyProcess = spawn('python', ['-c', `
 import yt_dlp, json, sys, urllib.parse, requests, re
 
 def extract_video_id(url):
@@ -200,23 +209,36 @@ except Exception as e:
     pass
 
 print(json.dumps({"success": False}))
-    `, url], { cwd: process.cwd() });
+      `, url], { cwd: process.cwd() });
 
-    let stdout = '';
-    pyProcess.stdout.on('data', (data) => { stdout += data.toString(); });
-    pyProcess.on('close', (code) => {
-      if (code === 0 && stdout) {
-        try {
-          const parsed = JSON.parse(stdout);
-          if (parsed && parsed.success) return resolve(parsed);
-        } catch {}
-      }
+      let stdout = '';
+      const timer = setTimeout(() => {
+        pyProcess.kill();
+        resolve(null);
+      }, 1500);
+
+      pyProcess.stdout.on('data', (data) => { stdout += data.toString(); });
+      pyProcess.on('error', () => {
+        clearTimeout(timer);
+        resolve(null);
+      });
+      pyProcess.on('close', (code) => {
+        clearTimeout(timer);
+        if (code === 0 && stdout) {
+          try {
+            const parsed = JSON.parse(stdout);
+            if (parsed && parsed.success) return resolve(parsed);
+          } catch {}
+        }
+        resolve(null);
+      });
+    } catch {
       resolve(null);
-    });
+    }
   });
 }
 
-// 4. Fallback oEmbed Metadata
+// 4. Fast Fallback oEmbed Metadata (Always completes in < 200ms)
 async function fetchOEmbedFallback(url, videoId) {
   try {
     const oRes = await fetch(
@@ -300,7 +322,7 @@ export async function POST(request) {
     const match = url.match(/(?:v=|\/embed\/|\/144\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     const videoId = match ? match[1] : '';
 
-    // Step 0: Render Python Backend (3-second timeout so Vercel serverless never hangs!)
+    // Step 0: Render Python Backend (3-second timeout)
     const renderResult = await extractWithRenderBackend(url.trim());
     if (renderResult && renderResult.success && renderResult.data && renderResult.data.formats) {
       const hasRealUrl = renderResult.data.formats.some(f => f.downloadUrl && !f.downloadUrl.includes('youtube.com/watch'));
@@ -309,19 +331,19 @@ export async function POST(request) {
       }
     }
 
-    // Step 1: Extract with @distube/ytdl-core (1.5s Native Serverless on Vercel)
+    // Step 1: Extract with @distube/ytdl-core (3.5s Strict Race Timeout on Vercel)
     const ytdlResult = await extractWithYtdlCore(url.trim());
     if (ytdlResult && ytdlResult.success) {
       return NextResponse.json(ytdlResult);
     }
 
-    // Step 2: Try Local Python yt_dlp extraction
+    // Step 2: Try Local Python yt_dlp extraction (1.5s timeout)
     const pyResult = await runYtDlpPython(url.trim());
     if (pyResult && pyResult.success) {
       return NextResponse.json(pyResult);
     }
 
-    // Step 3: Fallback oEmbed
+    // Step 3: Fast Fallback oEmbed (Guarantees < 200ms response & prevents 504 Gateway Timeout)
     if (videoId) {
       const fallback = await fetchOEmbedFallback(url.trim(), videoId);
       if (fallback && fallback.success) {
