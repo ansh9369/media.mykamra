@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import ytdl from '@distube/ytdl-core';
 
+export const maxDuration = 10;
+export const dynamic = 'force-dynamic';
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || '';
+
 async function getY2MateStreamUrl(vid, isAudioOnly) {
   try {
     const res = await fetch('https://www.y2mate.com/mates/analyzeV2/ajax', {
@@ -44,12 +49,12 @@ async function getY2MateStreamUrl(vid, isAudioOnly) {
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  let targetUrl = searchParams.get('url');
+  let targetUrl = searchParams.get('url') || '';
   const videoId = searchParams.get('videoId') || searchParams.get('videoid') || '';
   const resolution = searchParams.get('resolution') || '';
 
-  // 0. Instant Direct Stream Redirect if targetUrl is already a resolved media stream URL
-  if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a') || targetUrl.includes('loader.to'))) {
+  // 0. Instant Direct Stream Redirect if targetUrl is already a resolved media stream URL (googlevideo, y2mate, mp4, m4a)
+  if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('y2mate') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a'))) {
     return NextResponse.redirect(targetUrl);
   }
 
@@ -57,46 +62,74 @@ export async function GET(request) {
   let vid = videoId;
   if (!vid && targetUrl) {
     try {
-      vid = ytdl.getURLVideoID(targetUrl);
+      const match = targetUrl.match(/(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+      if (match) vid = match[1];
     } catch {
-      vid = '6-60kFPNa6U';
+      vid = '';
     }
   }
-  if (!vid) vid = '6-60kFPNa6U';
 
-  // 1. High-Speed Node.js Stream Extraction via @distube/ytdl-core
-  try {
-    const ytUrl = `https://www.youtube.com/watch?v=${vid}`;
-    const info = await ytdl.getInfo(ytUrl, {
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  // 1. Python Render Backend Proxy (If BACKEND_URL environment variable is configured)
+  if (BACKEND_URL && !BACKEND_URL.includes('localhost') && vid) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const bRes = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/download?videoId=${vid}&resolution=${resolution}`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (bRes.ok && bRes.url && !bRes.url.includes('youtube.com/watch')) {
+        return NextResponse.redirect(bRes.url);
+      }
+    } catch (err) {
+      console.error('Backend download proxy error:', err.message);
+    }
+  }
+
+  // 2. High-Speed Node.js Stream Extraction via @distube/ytdl-core (3.5s strict timeout)
+  if (vid) {
+    try {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('YTDL_TIMEOUT')), 3500)
+      );
+
+      const ytUrl = `https://www.youtube.com/watch?v=${vid}`;
+      const infoPromise = ytdl.getInfo(ytUrl, {
+        requestOptions: {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
         },
-      },
-    });
+      });
 
-    let selectedFormat;
-    if (isAudioOnly) {
-      selectedFormat = ytdl.chooseFormat(info.formats, { quality: 'highestaudio', filter: 'audioonly' }) ||
-                       ytdl.chooseFormat(info.formats, { quality: 'highestaudio' });
-    } else {
-      selectedFormat = ytdl.chooseFormat(info.formats, { quality: 'highestvideo', filter: 'audioandvideo' }) ||
-                       ytdl.chooseFormat(info.formats, { quality: 'highest' });
+      const info = await Promise.race([infoPromise, timeoutPromise]);
+
+      let selectedFormat;
+      if (isAudioOnly) {
+        selectedFormat = ytdl.chooseFormat(info.formats, { quality: 'highestaudio', filter: 'audioonly' }) ||
+                         ytdl.chooseFormat(info.formats, { quality: 'highestaudio' });
+      } else {
+        selectedFormat = ytdl.chooseFormat(info.formats, { quality: 'highestvideo', filter: 'audioandvideo' }) ||
+                         ytdl.chooseFormat(info.formats, { quality: 'highest' });
+      }
+
+      if (selectedFormat && selectedFormat.url) {
+        return NextResponse.redirect(selectedFormat.url);
+      }
+    } catch (err) {
+      console.error('Node ytdl-core extraction error:', err.message);
     }
 
-    if (selectedFormat && selectedFormat.url) {
-      return NextResponse.redirect(selectedFormat.url);
+    // 3. High-Speed Fallback Engine via Y2Mate API
+    const y2mateDlink = await getY2MateStreamUrl(vid, isAudioOnly);
+    if (y2mateDlink) {
+      return NextResponse.redirect(y2mateDlink);
     }
-  } catch (err) {
-    console.error('Node ytdl-core extraction error:', err.message);
+
+    // 4. Reliable 1-Click Downloader Redirect (Opens instant video/audio downloader instead of YouTube watch page)
+    return NextResponse.redirect(`https://www.youtubepp.com/watch?v=${vid}`);
   }
 
-  // 2. High-Speed Fallback Engine via Y2Mate API
-  const y2mateDlink = await getY2MateStreamUrl(vid, isAudioOnly);
-  if (y2mateDlink) {
-    return NextResponse.redirect(y2mateDlink);
-  }
-
-  // 3. Final Fallback: Direct YouTube Watch URL
-  return NextResponse.redirect(`https://www.youtube.com/watch?v=${vid}`);
+  return NextResponse.redirect('https://www.youtubepp.com');
 }
+

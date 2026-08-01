@@ -273,7 +273,7 @@ async function fetchOEmbedFallback(url, videoId) {
             playableAsIs: true,
             filesizeApprox: 45000000,
             note: '720p HD (Video+Audio)',
-            downloadUrl: `https://www.youtube.com/watch?v=${videoId}`,
+            downloadUrl: `https://www.youtubepp.com/watch?v=${videoId}`,
           },
           {
             formatId: '360p_mp4',
@@ -285,7 +285,7 @@ async function fetchOEmbedFallback(url, videoId) {
             playableAsIs: true,
             filesizeApprox: 18000000,
             note: '360p SD (Video+Audio)',
-            downloadUrl: `https://www.youtube.com/watch?v=${videoId}`,
+            downloadUrl: `https://www.youtubepp.com/watch?v=${videoId}`,
           },
           {
             formatId: 'audio_m4a',
@@ -297,7 +297,7 @@ async function fetchOEmbedFallback(url, videoId) {
             playableAsIs: false,
             filesizeApprox: 5000000,
             note: 'Audio Only',
-            downloadUrl: `https://www.youtube.com/watch?v=${videoId}`,
+            downloadUrl: `https://www.youtubepp.com/watch?v=${videoId}`,
           },
         ],
       },
