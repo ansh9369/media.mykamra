@@ -46,7 +46,7 @@ export default function FormatRow({ format, index, onDownload, isDownloading }) 
         </motion.div>
 
         <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span
               style={{
                 fontFamily: 'var(--font-display)',
@@ -70,6 +70,38 @@ export default function FormatRow({ format, index, onDownload, isDownloading }) 
             >
               {format.ext}
             </span>
+            {format.hasVideo && hasAudio && (
+              <span
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 12,
+                  background: '#22c55e1a',
+                  color: '#22c55e',
+                  border: '1px solid #22c55e33',
+                }}
+              >
+                Video + Audio
+              </span>
+            )}
+            {!format.hasVideo && hasAudio && (
+              <span
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 12,
+                  background: '#3b82f61a',
+                  color: '#3b82f6',
+                  border: '1px solid #3b82f633',
+                }}
+              >
+                Audio Only
+              </span>
+            )}
           </div>
           <div
             style={{
@@ -78,15 +110,15 @@ export default function FormatRow({ format, index, onDownload, isDownloading }) 
               gap: 6,
               fontSize: 12.5,
               color: 'var(--text-lo)',
-              marginTop: 3,
+              marginTop: 4,
             }}
           >
             {hasAudio ? (
-              <Volume2 size={12} color="var(--signal)" />
+              <Volume2 size={13} color={format.hasVideo ? '#22c55e' : '#3b82f6'} />
             ) : (
-              <VolumeX size={12} />
+              <VolumeX size={13} />
             )}
-            <span>{hasAudio ? 'with audio' : 'no audio'}</span>
+            <span>{hasAudio ? (format.hasVideo ? 'Full Sound & Video' : 'Audio Track Only') : 'No Audio Track'}</span>
             <span>·</span>
             <span>{formatBytes(format.filesizeApprox)}</span>
           </div>
