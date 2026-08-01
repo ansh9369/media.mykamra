@@ -75,7 +75,14 @@ def probe_video(req: ProbeRequest):
         'nocheckcertificate': True,
         'ignoreerrors': True,
         'geo_bypass': True,
-        'format': 'best',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
     }
 
     try:
@@ -202,7 +209,7 @@ def probe_video(req: ProbeRequest):
                     "playableAsIs": True,
                     "filesizeApprox": 45000000,
                     "note": "720p HD (Video+Audio)",
-                    "downloadUrl": f"https://www.youtube.com/watch?v={video_id}"
+                    "downloadUrl": f"https://ssyoutube.com/watch?v={video_id}"
                 },
                 {
                     "formatId": "360p_mp4",
@@ -214,7 +221,7 @@ def probe_video(req: ProbeRequest):
                     "playableAsIs": True,
                     "filesizeApprox": 18000000,
                     "note": "360p SD (Video+Audio)",
-                    "downloadUrl": f"https://www.youtube.com/watch?v={video_id}"
+                    "downloadUrl": f"https://ssyoutube.com/watch?v={video_id}"
                 },
                 {
                     "formatId": "audio_m4a",
@@ -226,11 +233,53 @@ def probe_video(req: ProbeRequest):
                     "playableAsIs": False,
                     "filesizeApprox": 5000000,
                     "note": "Audio Only",
-                    "downloadUrl": f"https://www.youtube.com/watch?v={video_id}"
+                    "downloadUrl": f"https://ssyoutube.com/watch?v={video_id}"
                 }
             ]
         }
     }
+
+def extract_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'nocheckcertificate': True,
+        'geo_bypass': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            if info and info.get('formats'):
+                raw_formats = info.get('formats', [])
+                for f in raw_formats:
+                    url_fmt = f.get('url', '')
+                    if not url_fmt or 'googlevideo.com' not in url_fmt:
+                        continue
+                    vcodec = f.get('vcodec', 'none')
+                    acodec = f.get('acodec', 'none')
+                    has_video = vcodec != 'none' and vcodec is not None
+                    has_audio = acodec != 'none' and acodec is not None
+                    if is_audio and has_audio:
+                        return url_fmt
+                    if not is_audio and has_video:
+                        return url_fmt
+                # Fallback to any Googlevideo URL
+                for f in raw_formats:
+                    url_fmt = f.get('url', '')
+                    if 'googlevideo.com' in url_fmt:
+                        return url_fmt
+    except Exception as e:
+        print("yt_dlp stream extraction error:", e)
+    return None
 
 @app.get("/api/download")
 def download_stream(url: str = "", videoId: str = "", video_id: str = "", filename: str = "video.mp4", resolution: str = ""):
@@ -238,13 +287,19 @@ def download_stream(url: str = "", videoId: str = "", video_id: str = "", filena
     vid = videoId or video_id or extract_video_id(target_url)
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # High-Speed direct CDN MP4 resolution
+    # 1. Backup stream redirect if target_url is already a resolved googlevideo CDN link
+    if target_url and "googlevideo.com" in target_url:
+        return RedirectResponse(url=target_url)
+
+    # 2. High-Speed direct CDN MP4 resolution via Y2Mate API
     y2_dlink = get_y2mate_dlink(vid, is_audio)
     if y2_dlink:
         return RedirectResponse(url=y2_dlink)
 
-    # Backup stream redirect
-    if target_url and "googlevideo.com" in target_url:
-        return RedirectResponse(url=target_url)
+    # 3. Direct yt_dlp stream extraction with android/web player client
+    direct_stream = extract_direct_stream_url(vid, is_audio)
+    if direct_stream:
+        return RedirectResponse(url=direct_stream)
 
-    return JSONResponse(status_code=400, content={"error": "Media stream not available."})
+    # 4. Fallback unblocked 1-Click Downloader
+    return RedirectResponse(url=f"https://ssyoutube.com/watch?v={vid}")
