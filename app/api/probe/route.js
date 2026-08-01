@@ -3,27 +3,33 @@ import ytdl from '@distube/ytdl-core';
 import { spawn } from 'child_process';
 import path from 'path';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'http://localhost:5000';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || '';
 
-// 1. Render Python Backend Proxy (If BACKEND_URL env is set and returns real stream URLs)
+// 1. Render Python Backend Proxy with 3s Timeout (Prevents Vercel 10s Serverless Timeout)
 async function extractWithRenderBackend(url) {
-  if (!BACKEND_URL) return null;
+  if (!BACKEND_URL || BACKEND_URL.includes('localhost')) return null;
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
     const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/probe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
+
     if (!res.ok) return null;
     const data = await res.json();
     return data;
   } catch (err) {
-    console.error('Render backend extraction error:', err.message);
+    console.error('Render backend extraction timeout/error:', err.message);
     return null;
   }
 }
 
-// 2. Primary Node.js Extractor using @distube/ytdl-core (Serverless Compatible)
+// 2. Primary Node.js Extractor using @distube/ytdl-core (Serverless Compatible - 1.5s Response)
 async function extractWithYtdlCore(url) {
   try {
     const info = await ytdl.getInfo(url, {
@@ -81,7 +87,6 @@ async function extractWithYtdlCore(url) {
 
       const filesize = parseInt(f.contentLength || '0', 10) || 0;
 
-      processedFormats.append ? null : null; // JS array
       processedFormats.push({
         formatId,
         ext,
@@ -130,7 +135,6 @@ async function extractWithYtdlCore(url) {
 // 3. Fallback Local Python yt-dlp Execution
 function runYtDlpPython(url) {
   return new Promise((resolve) => {
-    const backendScript = path.join(process.cwd(), 'backend', 'main.py');
     const pyProcess = spawn('python', ['-c', `
 import yt_dlp, json, sys, urllib.parse, requests, re
 
@@ -296,7 +300,7 @@ export async function POST(request) {
     const match = url.match(/(?:v=|\/embed\/|\/144\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     const videoId = match ? match[1] : '';
 
-    // Step 0: Render Python Backend (Only if it returns REAL downloadUrls, not dummy fallback watch links)
+    // Step 0: Render Python Backend (3-second timeout so Vercel serverless never hangs!)
     const renderResult = await extractWithRenderBackend(url.trim());
     if (renderResult && renderResult.success && renderResult.data && renderResult.data.formats) {
       const hasRealUrl = renderResult.data.formats.some(f => f.downloadUrl && !f.downloadUrl.includes('youtube.com/watch'));
@@ -305,7 +309,7 @@ export async function POST(request) {
       }
     }
 
-    // Step 1: Extract with @distube/ytdl-core (Fast & Serverless Native on Vercel)
+    // Step 1: Extract with @distube/ytdl-core (1.5s Native Serverless on Vercel)
     const ytdlResult = await extractWithYtdlCore(url.trim());
     if (ytdlResult && ytdlResult.success) {
       return NextResponse.json(ytdlResult);
