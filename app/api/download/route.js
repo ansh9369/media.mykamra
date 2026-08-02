@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 
-export const maxDuration = 60;
+export const runtime = 'nodejs';
+export const maxDuration = 10;
 export const dynamic = 'force-dynamic';
 
 const BACKEND_URL = process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
@@ -14,7 +15,7 @@ function extractVideoId(url) {
 // Binary Stream Proxy Function (Strictly Returns Native Attachment Stream)
 async function proxyStreamResponse(streamUrl, filename, ext) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const timeoutId = setTimeout(() => controller.abort(), 8500);
 
   try {
     const upstreamRes = await fetch(streamUrl, {
@@ -64,7 +65,7 @@ async function proxyStreamResponse(streamUrl, filename, ext) {
   return null;
 }
 
-// Local Python yt-dlp Extractor for expired URL resolution
+// Local Python yt-dlp Extractor for expired URL resolution (Localhost)
 function runYtDlpLocalStream(videoId, isAudio) {
   return new Promise((resolve) => {
     try {
@@ -80,7 +81,7 @@ ydl_opts = {
     'skip_download': True,
     'nocheckcertificate': True,
     'geo_bypass': True,
-    'socket_timeout': 20,
+    'socket_timeout': 8,
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'web']
@@ -125,7 +126,7 @@ print("")
       const timer = setTimeout(() => {
         pyProcess.kill();
         resolve('');
-      }, 20000);
+      }, 8500);
 
       pyProcess.stdout.on('data', (data) => { stdout += data.toString(); });
       pyProcess.on('error', () => {
@@ -162,7 +163,7 @@ export async function GET(request) {
   // 2. Query Render Python Backend Proxy (/api/download)
   if (BACKEND_URL && videoId) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const timeoutId = setTimeout(() => controller.abort(), 8500);
 
     try {
       const bRes = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/download?videoId=${videoId}&resolution=${encodeURIComponent(resolution)}&filename=${encodeURIComponent(title)}`, {
@@ -196,7 +197,7 @@ export async function GET(request) {
     }
   }
 
-  // 3. Local Python Extractor Fallback for Expired URL Resolution
+  // 3. Local Python Extractor Fallback for Expired URL Resolution (Localhost)
   if (videoId) {
     const localStreamUrl = await runYtDlpLocalStream(videoId, isAudioOnly);
     if (localStreamUrl) {
@@ -208,6 +209,6 @@ export async function GET(request) {
   console.error(`[DOWNLOAD API FAIL] Unable to fetch downloadable media for Video ID: ${videoId}`);
   return NextResponse.json(
     { success: false, stage: 'download', error: 'Unable to fetch downloadable media' },
-    { status: 502 }
+    { status: 500 }
   );
 }

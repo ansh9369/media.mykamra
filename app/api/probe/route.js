@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 
-export const maxDuration = 60;
+export const runtime = 'nodejs';
+export const maxDuration = 10;
 export const dynamic = 'force-dynamic';
 
 const BACKEND_URL = process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
@@ -11,11 +12,11 @@ function extractVideoId(url) {
   return match ? match[1] : '';
 }
 
-// 1. Render Python Backend Probe Proxy (20-Second Timeout with AbortController)
+// 1. Render Python Backend Probe Proxy (8.5-Second Timeout for Vercel Serverless Compatibility)
 async function extractWithBackend(url) {
   if (!BACKEND_URL) return null;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const timeoutId = setTimeout(() => controller.abort(), 8500);
 
   try {
     const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/probe`, {
@@ -40,7 +41,7 @@ async function extractWithBackend(url) {
   return null;
 }
 
-// 2. Local Python yt-dlp Extractor (20-Second Timeout with exact signature deciphering)
+// 2. Local Python yt-dlp Extractor (For Localhost Environment)
 function runYtDlpLocal(url) {
   return new Promise((resolve) => {
     try {
@@ -60,7 +61,7 @@ ydl_opts = {
     'skip_download': True,
     'nocheckcertificate': True,
     'geo_bypass': True,
-    'socket_timeout': 20,
+    'socket_timeout': 8,
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'web']
@@ -117,7 +118,7 @@ try:
                 presets = list(set(x['resolution'] for x in processed))
                 print(json.dumps({"success": True, "data": {"type": "video", "id": vid, "title": title, "uploader": uploader, "duration": duration, "thumbnail": thumbnail, "viewCount": view_count, "uploadDate": "", "availableQualityPresets": presets, "formats": processed}}))
                 sys.exit(0)
-except Exception as e:
+except Exception:
     pass
 
 print(json.dumps({"success": False, "stage": "probe", "error": "Unable to fetch downloadable media"}))
@@ -127,7 +128,7 @@ print(json.dumps({"success": False, "stage": "probe", "error": "Unable to fetch 
       const timer = setTimeout(() => {
         pyProcess.kill();
         resolve(null);
-      }, 20000);
+      }, 8500);
 
       pyProcess.stdout.on('data', (data) => { stdout += data.toString(); });
       pyProcess.on('error', () => {
@@ -165,22 +166,22 @@ export async function POST(request) {
       );
     }
 
-    // Step 1: Query Python Backend
+    // Step 1: Query Render Python Backend
     const backendResult = await extractWithBackend(targetUrl);
     if (backendResult && backendResult.success) {
-      return NextResponse.json(backendResult);
+      return NextResponse.json(backendResult, { status: 200 });
     }
 
-    // Step 2: Query Local Python Extractor (yt-dlp deciphered)
+    // Step 2: Query Local Python Extractor (Localhost fallback)
     const localResult = await runYtDlpLocal(targetUrl);
     if (localResult && localResult.success) {
-      return NextResponse.json(localResult);
+      return NextResponse.json(localResult, { status: 200 });
     }
 
     console.error(`[PROBE ROUTE FAIL] Extraction failed for: ${targetUrl}`);
     return NextResponse.json(
       { success: false, stage: 'probe', error: 'Unable to fetch downloadable media' },
-      { status: 404 }
+      { status: 500 }
     );
   } catch (err) {
     console.error(`[PROBE ROUTE EXCEPTION] Error processing request:`, err.message);
