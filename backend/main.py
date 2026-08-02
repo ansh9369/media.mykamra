@@ -77,7 +77,7 @@ def probe_video(req: ProbeRequest):
         'geo_bypass': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web']
+                'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
             }
         },
         'http_headers': {
@@ -248,7 +248,7 @@ def extract_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
         'geo_bypass': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web']
+                'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
             }
         },
         'http_headers': {
