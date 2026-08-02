@@ -92,19 +92,29 @@ def probe_video(req: ProbeRequest):
             raw_formats = info.get('formats', [])
             processed_formats = []
             seen = set()
+            seen_formats = set()
 
             for f in raw_formats:
                 url_download = f.get('url', '')
                 if not url_download or not url_download.startswith('http'):
                     continue
 
+                ext = f.get('ext', 'mp4')
+                if ext in ['mhtml', 'sb0', 'sb1', 'sb2', 'sb3']:
+                    continue
+
                 vcodec = f.get('vcodec', 'none')
                 acodec = f.get('acodec', 'none')
                 has_video = vcodec != 'none' and vcodec is not None
                 has_audio = acodec != 'none' and acodec is not None
-
+                
                 if not has_video and not has_audio:
                     continue
+
+                format_id = str(f.get('format_id', ''))
+                if format_id in seen_formats:
+                    continue
+                seen_formats.add(format_id)
 
                 height = f.get('height')
                 format_note = f.get('format_note', '') or ''
