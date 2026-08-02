@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
+import ytdl from '@distube/ytdl-core';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -40,7 +41,92 @@ async function extractWithBackend(url) {
   return null;
 }
 
-// 2. Local Python yt-dlp Extractor Fallback (20-Second Timeout)
+// 2. Node.js ytdl-core Fallback Extractor (8-Second Timeout)
+async function extractWithYtdlCore(url) {
+  try {
+    const info = await ytdl.getInfo(url, {
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://www.youtube.com/',
+        },
+      },
+    });
+
+    if (!info || !info.videoDetails) return null;
+
+    const details = info.videoDetails;
+    const videoId = details.videoId || extractVideoId(url);
+    const title = details.title || 'YouTube Video';
+    const uploader = details.author ? details.author.name : 'YouTube Creator';
+    const duration = parseInt(details.lengthSeconds || '0', 10);
+    const thumbnail = details.thumbnails && details.thumbnails.length > 0
+      ? details.thumbnails[details.thumbnails.length - 1].url
+      : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    const viewCount = parseInt(details.viewCount || '0', 10);
+
+    const rawFormats = info.formats || [];
+    const processedFormats = [];
+    const seen = new Set();
+
+    for (const f of rawFormats) {
+      if (!f.url) continue;
+      const hasVideo = Boolean(f.hasVideo);
+      const hasAudio = Boolean(f.hasAudio);
+      if (!hasVideo && !hasAudio) continue;
+
+      let resolution = 'audio only';
+      if (hasVideo) {
+        if (f.qualityLabel) resolution = f.qualityLabel.replace(/p\d+$/, 'p');
+        else if (f.height) resolution = `${f.height}p`;
+        else resolution = 'SD';
+      }
+
+      const ext = f.container || (hasVideo ? 'mp4' : 'm4a');
+      const formatId = `${f.itag || ''}_${resolution}_${ext}`;
+      const key = `${resolution}_${ext}_${hasVideo}_${hasAudio}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      processedFormats.push({
+        formatId,
+        ext,
+        resolution,
+        fps: f.fps || null,
+        hasVideo,
+        hasAudio,
+        playableAsIs: hasVideo && hasAudio,
+        filesizeApprox: parseInt(f.contentLength || '0', 10) || 0,
+        note: `${resolution} (${hasVideo && hasAudio ? 'Video+Audio' : hasAudio ? 'Audio Only' : 'Video Only'})`,
+        downloadUrl: f.url,
+      });
+    }
+
+    if (processedFormats.length === 0) return null;
+    const presets = Array.from(new Set(processedFormats.map((f) => f.resolution)));
+
+    return {
+      success: true,
+      data: {
+        type: 'video',
+        id: videoId,
+        title,
+        uploader,
+        duration,
+        thumbnail,
+        viewCount,
+        uploadDate: '',
+        availableQualityPresets: presets,
+        formats: processedFormats,
+      },
+    };
+  } catch (err) {
+    console.error(`[YTDL-CORE FALLBACK ERROR] ${url}:`, err.message);
+    return null;
+  }
+}
+
+// 3. Local Python yt-dlp Extractor Fallback (20-Second Timeout)
 function runYtDlpLocal(url) {
   return new Promise((resolve) => {
     try {
@@ -88,7 +174,7 @@ try:
 
             for f in raw_formats:
                 url_fmt = f.get('url', '')
-                if not url_fmt or 'googlevideo.com' not in url_fmt: continue
+                if not url_fmt or not url_fmt.startswith('http'): continue
                 vcodec = f.get('vcodec', 'none')
                 acodec = f.get('acodec', 'none')
                 has_video = vcodec != 'none' and vcodec is not None
@@ -171,7 +257,13 @@ export async function POST(request) {
       return NextResponse.json(backendResult);
     }
 
-    // Step 2: Query Local Python Extractor
+    // Step 2: Query Node.js ytdl-core Extractor
+    const ytdlResult = await extractWithYtdlCore(targetUrl);
+    if (ytdlResult && ytdlResult.success) {
+      return NextResponse.json(ytdlResult);
+    }
+
+    // Step 3: Query Local Python Extractor
     const localResult = await runYtDlpLocal(targetUrl);
     if (localResult && localResult.success) {
       return NextResponse.json(localResult);

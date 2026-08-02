@@ -95,7 +95,7 @@ def probe_video(req: ProbeRequest):
 
             for f in raw_formats:
                 url_download = f.get('url', '')
-                if not url_download or 'googlevideo.com' not in url_download:
+                if not url_download or not url_download.startswith('http'):
                     continue
 
                 vcodec = f.get('vcodec', 'none')
@@ -182,7 +182,7 @@ def resolve_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
                 raw_formats = info.get('formats', [])
                 for f in raw_formats:
                     url_fmt = f.get('url', '')
-                    if not url_fmt or 'googlevideo.com' not in url_fmt:
+                    if not url_fmt or not url_fmt.startswith('http'):
                         continue
                     vcodec = f.get('vcodec', 'none')
                     acodec = f.get('acodec', 'none')
@@ -194,7 +194,7 @@ def resolve_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
                         return url_fmt
                 for f in raw_formats:
                     url_fmt = f.get('url', '')
-                    if 'googlevideo.com' in url_fmt:
+                    if url_fmt and url_fmt.startswith('http'):
                         return url_fmt
     except Exception as e:
         logger.error(f"[RESOLVE STREAM ERROR] {video_id}: {str(e)}")
