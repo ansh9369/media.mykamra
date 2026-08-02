@@ -47,14 +47,48 @@ async function getY2MateStreamUrl(vid, isAudioOnly) {
   return null;
 }
 
+async function proxyMediaStream(streamUrl, title, ext) {
+  try {
+    const res = await fetch(streamUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+      },
+    });
+
+    if (res.ok && res.body) {
+      const cleanTitle = (title || 'video').replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'video';
+      const fileExt = ext || 'mp4';
+      const filename = `${cleanTitle}.${fileExt}`;
+      const contentType = res.headers.get('content-type') || (fileExt === 'mp3' || fileExt === 'm4a' ? 'audio/mpeg' : 'video/mp4');
+
+      return new Response(res.body, {
+        status: 200,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+  } catch (err) {
+    console.error('proxyMediaStream error:', err.message);
+  }
+  return null;
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   let targetUrl = searchParams.get('url') || '';
+  const title = searchParams.get('title') || 'media';
+  const ext = searchParams.get('ext') || 'mp4';
   const videoId = searchParams.get('videoId') || searchParams.get('videoid') || '';
   const resolution = searchParams.get('resolution') || '';
 
-  // 0. Instant Direct Stream Redirect if targetUrl is already a resolved media stream URL (googlevideo, y2mate, mp4, m4a)
-  if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('y2mate') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a'))) {
+  // 0. If targetUrl is already a resolved googlevideo/media CDN URL, proxy stream directly to trigger file download!
+  if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a'))) {
+    const proxied = await proxyMediaStream(targetUrl, title, ext);
+    if (proxied) return proxied;
     return NextResponse.redirect(targetUrl);
   }
 
@@ -79,7 +113,8 @@ export async function GET(request) {
       });
       clearTimeout(timeoutId);
       if (bRes.ok && bRes.url && !bRes.url.includes('youtube.com/watch')) {
-        return NextResponse.redirect(bRes.url);
+        const proxied = await proxyMediaStream(bRes.url, title, ext);
+        if (proxied) return proxied;
       }
     } catch (err) {
       console.error('Backend download proxy error:', err.message);
@@ -114,7 +149,8 @@ export async function GET(request) {
       }
 
       if (selectedFormat && selectedFormat.url) {
-        return NextResponse.redirect(selectedFormat.url);
+        const proxied = await proxyMediaStream(selectedFormat.url, title, ext);
+        if (proxied) return proxied;
       }
     } catch (err) {
       console.error('Node ytdl-core extraction error:', err.message);
@@ -123,6 +159,8 @@ export async function GET(request) {
     // 3. High-Speed Fallback Engine via Y2Mate API
     const y2mateDlink = await getY2MateStreamUrl(vid, isAudioOnly);
     if (y2mateDlink) {
+      const proxied = await proxyMediaStream(y2mateDlink, title, ext);
+      if (proxied) return proxied;
       return NextResponse.redirect(y2mateDlink);
     }
 

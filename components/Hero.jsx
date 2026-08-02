@@ -535,23 +535,10 @@ export default function Hero() {
       const videoId = result?.id || '';
       const rawUrl = format.downloadUrl || '';
 
-      // If rawUrl is a direct Googlevideo / Y2Mate CDN media stream, trigger direct file download!
-      if (rawUrl && (rawUrl.includes('googlevideo.com') || rawUrl.includes('y2mate') || rawUrl.includes('.mp4') || rawUrl.includes('.m4a'))) {
-        const anchor = document.createElement('a');
-        anchor.style.display = 'none';
-        anchor.href = rawUrl;
-        anchor.setAttribute('download', `${title.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'media'}.${ext}`);
-        anchor.target = '_blank';
-        document.body.appendChild(anchor);
-        anchor.click();
-        setTimeout(() => {
-          if (document.body.contains(anchor)) document.body.removeChild(anchor);
-        }, 300);
-      } else {
-        // Fallback: Trigger download stream in a new tab so main app page never gets interrupted
-        const downloadApiUrl = `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${encodeURIComponent(ext)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(format.resolution)}`;
-        window.open(downloadApiUrl, '_blank');
-      }
+      const downloadApiUrl = `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${encodeURIComponent(ext)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(format.resolution)}`;
+
+      // Direct native browser download stream trigger
+      window.location.href = downloadApiUrl;
     } catch (err) {
       console.error('Download error:', err);
     } finally {
