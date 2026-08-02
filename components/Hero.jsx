@@ -7,7 +7,7 @@ import SignalWave from './SignalWave';
 import VideoMeta from './VideoMeta';
 import QualityTabs from './QualityTabs';
 import FormatRow from './FormatRow';
-import { probeVideo } from '@/lib/probe';
+import { probeVideo, createDownloadJob, pollDownloadJobStatus, getDownloadFileUrl } from '@/lib/probe';
 import { groupFormatsByResolution } from '@/lib/format';
 
 const STATE = { IDLE: 'idle', SCANNING: 'scanning', LOCKED: 'locked', ERROR: 'error' };
@@ -20,6 +20,7 @@ export default function Hero() {
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('All');
   const [downloadingFormatId, setDownloadingFormatId] = useState(null);
+  const [jobProgressMap, setJobProgressMap] = useState({});
   const inputRef = useRef(null);
 
   const tabs = useMemo(() => {
@@ -48,7 +49,7 @@ export default function Hero() {
       setResult(data);
       setState(STATE.LOCKED);
     } catch (e) {
-      setError(e.message || 'Unable to fetch downloadable media');
+      setError(e.message || 'Unable to fetch downloadable media. Please verify the URL.');
       setState(STATE.ERROR);
     }
   }
@@ -63,9 +64,10 @@ export default function Hero() {
     }
   }
 
-  function handleDownload(format) {
+  async function handleDownload(format) {
     if (downloadingFormatId) return;
-    setDownloadingFormatId(format.formatId);
+    const fmtId = format.formatId;
+    setDownloadingFormatId(fmtId);
 
     try {
       const title = result?.title || 'media';
@@ -73,14 +75,56 @@ export default function Hero() {
       const videoId = result?.id || '';
       const rawUrl = format.downloadUrl || '';
 
-      const downloadApiUrl = `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${encodeURIComponent(ext)}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(format.resolution)}`;
+      // Step 1: Create Queue Job via /api/download
+      const jobData = await createDownloadJob({
+        url: url.trim() || rawUrl,
+        videoId,
+        resolution: format.resolution,
+        preset: format.resolution,
+        formatId: fmtId,
+        title,
+        ext,
+        downloadUrl: rawUrl,
+      });
 
-      // Direct native browser download stream trigger
-      window.location.href = downloadApiUrl;
+      setJobProgressMap((prev) => ({
+        ...prev,
+        [fmtId]: {
+          status: jobData.status,
+          progress: jobData.progress,
+          stage: jobData.stage,
+        },
+      }));
+
+      // Step 2: Poll status via /api/download/:jobId
+      const finalJob = await pollDownloadJobStatus(jobData.jobId, (progressData) => {
+        setJobProgressMap((prev) => ({
+          ...prev,
+          [fmtId]: {
+            status: progressData.status,
+            progress: progressData.progress,
+            stage: progressData.stage,
+          },
+        }));
+      });
+
+      // Step 3: Trigger direct media stream download via /api/files/:jobId
+      const fileStreamUrl = getDownloadFileUrl(finalJob.jobId);
+      window.location.href = fileStreamUrl;
     } catch (err) {
-      console.error('Download error:', err);
+      console.error('Download job error:', err);
+      // Direct stream fallback trigger if queue fails
+      const fallbackUrl = `/api/download?url=${encodeURIComponent(format.downloadUrl || '')}&title=${encodeURIComponent(result?.title || 'media')}&ext=${encodeURIComponent(format.ext || 'mp4')}&videoId=${encodeURIComponent(result?.id || '')}&resolution=${encodeURIComponent(format.resolution || '')}`;
+      window.location.href = fallbackUrl;
     } finally {
-      setTimeout(() => setDownloadingFormatId(null), 3000);
+      setTimeout(() => {
+        setDownloadingFormatId(null);
+        setJobProgressMap((prev) => {
+          const next = { ...prev };
+          delete next[fmtId];
+          return next;
+        });
+      }, 3500);
     }
   }
 
@@ -260,6 +304,7 @@ export default function Hero() {
                       index={i}
                       onDownload={handleDownload}
                       isDownloading={downloadingFormatId === format.formatId}
+                      jobProgress={jobProgressMap[format.formatId]}
                     />
                   ))}
                 </AnimatePresence>

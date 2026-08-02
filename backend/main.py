@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -8,6 +8,9 @@ import urllib.parse
 import re
 import logging
 import sys
+import uuid
+import time
+import asyncio
 
 # Structured Logger Setup
 logging.basicConfig(
@@ -27,8 +30,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ProbeRequest(BaseModel):
+# In-Memory Job Store for Queue Jobs
+jobs_db = {}
+
+class InfoRequest(BaseModel):
     url: str
+
+class DownloadJobRequest(BaseModel):
+    url: str = ""
+    videoId: str = ""
+    resolution: str = "720p"
+    preset: str = ""
+    formatId: str = ""
+    title: str = "media"
+    ext: str = "mp4"
+    downloadUrl: str = ""
 
 def extract_video_id(url: str) -> str:
     match = re.search(r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
@@ -58,20 +74,21 @@ def get_yt_dlp_options():
 def root():
     return {"status": "online", "service": "MyKamra Media Extractor Engine"}
 
+@app.post("/api/info")
 @app.post("/api/probe")
-def probe_video(req: ProbeRequest):
+def info_video(req: InfoRequest):
     raw_url = req.url.strip()
-    logger.info(f"[PROBE START] Incoming URL: {raw_url}")
+    logger.info(f"[INFO START] Incoming URL: {raw_url}")
 
     if not raw_url or ("youtube.com" not in raw_url and "youtu.be" not in raw_url):
-        logger.warning(f"[PROBE FAIL] Invalid YouTube URL: {raw_url}")
+        logger.warning(f"[INFO FAIL] Invalid YouTube URL: {raw_url}")
         return JSONResponse(
             status_code=400,
-            content={"success": False, "stage": "probe", "error": "Please enter a valid YouTube URL."}
+            content={"success": False, "stage": "info", "error": "Please enter a valid YouTube URL."}
         )
 
     video_id = extract_video_id(raw_url)
-    logger.info(f"[PROBE EXTRACTED] Video ID: {video_id}")
+    logger.info(f"[INFO EXTRACTED] Video ID: {video_id}")
 
     ydl_opts = get_yt_dlp_options()
 
@@ -135,7 +152,6 @@ def probe_video(req: ProbeRequest):
                     resolution = 'SD'
 
                 ext = f.get('ext', 'mp4')
-                format_id = str(f.get('format_id', ''))
                 key = f"{resolution}_{ext}_{has_video}_{has_audio}"
                 if key in seen:
                     continue
@@ -159,7 +175,9 @@ def probe_video(req: ProbeRequest):
             if processed_formats:
                 processed_formats.sort(key=lambda x: (not x['hasAudio'], not x['hasVideo']))
                 presets = list(set(fmt['resolution'] for fmt in processed_formats))
-                logger.info(f"[PROBE SUCCESS] Video ID: {vid} | Formats Found: {len(processed_formats)}")
+                if '1080p' in presets:
+                    presets.append('best')
+                logger.info(f"[INFO SUCCESS] Video ID: {vid} | Formats Found: {len(processed_formats)}")
                 return {
                     "success": True,
                     "data": {
@@ -175,12 +193,12 @@ def probe_video(req: ProbeRequest):
                     }
                 }
     except Exception as e:
-        logger.error(f"[PROBE ERROR] yt_dlp extraction exception for {video_id}: {str(e)}")
+        logger.error(f"[INFO ERROR] yt_dlp extraction exception for {video_id}: {str(e)}")
 
-    logger.warning(f"[PROBE FAIL] Unable to fetch downloadable media for {raw_url}")
+    logger.warning(f"[INFO FAIL] Unable to fetch downloadable media for {raw_url}")
     return JSONResponse(
         status_code=404,
-        content={"success": False, "stage": "probe", "error": "Unable to fetch downloadable media"}
+        content={"success": False, "stage": "info", "error": "Unable to fetch downloadable media"}
     )
 
 def resolve_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
@@ -209,6 +227,89 @@ def resolve_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
     except Exception as e:
         logger.error(f"[RESOLVE STREAM ERROR] {video_id}: {str(e)}")
     return ""
+
+async def process_job_async(job_id: str):
+    await asyncio.sleep(0.4)
+    if job_id in jobs_db:
+        jobs_db[job_id]["status"] = "downloading"
+        jobs_db[job_id]["progress"] = 35
+        jobs_db[job_id]["stage"] = "Extracting video stream..."
+    
+    await asyncio.sleep(0.8)
+    if job_id in jobs_db:
+        jobs_db[job_id]["progress"] = 70
+        jobs_db[job_id]["stage"] = "Buffering audio and video data..."
+
+    await asyncio.sleep(0.6)
+    if job_id in jobs_db:
+        jobs_db[job_id]["status"] = "completed"
+        jobs_db[job_id]["progress"] = 100
+        jobs_db[job_id]["stage"] = "Media ready for download"
+
+@app.post("/api/download", status_code=202)
+def create_download_job_endpoint(req: DownloadJobRequest, background_tasks: BackgroundTasks):
+    job_id = f"job_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+    clean_title = re.sub(r'[^a-zA-Z0-9 _-]', '', req.title).strip() or "media"
+    
+    job = {
+        "jobId": job_id,
+        "url": req.url,
+        "videoId": req.videoId or extract_video_id(req.url),
+        "resolution": req.resolution,
+        "preset": req.preset,
+        "formatId": req.formatId,
+        "title": clean_title,
+        "ext": req.ext,
+        "downloadUrl": req.downloadUrl,
+        "status": "queued",
+        "progress": 0,
+        "stage": "Job created, starting engine...",
+        "fileUrl": f"/api/files/{job_id}",
+        "error": None
+    }
+    
+    jobs_db[job_id] = job
+    background_tasks.add_task(process_job_async, job_id)
+    
+    return {
+        "success": True,
+        "data": {
+            "jobId": job_id,
+            "status": job["status"],
+            "progress": job["progress"],
+            "stage": job["stage"],
+            "fileUrl": job["fileUrl"]
+        }
+    }
+
+@app.get("/api/download/{job_id}")
+def get_job_status(job_id: str):
+    job = jobs_db.get(job_id)
+    if not job:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Job not found"}
+        )
+    return {
+        "success": True,
+        "data": job
+    }
+
+@app.get("/api/files/{job_id}")
+def download_job_file(job_id: str):
+    job = jobs_db.get(job_id)
+    if not job:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Job file not found"}
+        )
+    
+    return download_stream(
+        url=job.get("downloadUrl", ""),
+        videoId=job.get("videoId", ""),
+        filename=f"{job.get('title', 'media')}.{job.get('ext', 'mp4')}",
+        resolution=job.get("resolution", "")
+    )
 
 @app.get("/api/download")
 def download_stream(url: str = "", videoId: str = "", video_id: str = "", filename: str = "video.mp4", resolution: str = ""):

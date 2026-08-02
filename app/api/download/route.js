@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
+import { createDownloadJob } from '@/lib/jobStore';
+import { proxyStreamResponse } from '@/lib/streamProxy';
 
 export const runtime = 'nodejs';
-export const maxDuration = 10;
+export const maxDuration = 15;
 export const dynamic = 'force-dynamic';
 
 const BACKEND_URL = process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
@@ -12,60 +14,7 @@ function extractVideoId(url) {
   return match ? match[1] : '';
 }
 
-// Binary Stream Proxy Function (Strictly Returns Native Attachment Stream)
-async function proxyStreamResponse(streamUrl, filename, ext) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8500);
-
-  try {
-    const upstreamRes = await fetch(streamUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Referer': 'https://www.youtube.com/',
-        'Origin': 'https://www.youtube.com',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (upstreamRes.ok && upstreamRes.body) {
-      const cleanTitle = (filename || 'media').replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'media';
-      const fileExt = ext || 'mp4';
-      const finalFilename = `${cleanTitle}.${fileExt}`;
-
-      const contentType = upstreamRes.headers.get('content-type') ||
-        (fileExt === 'mp3' || fileExt === 'm4a' ? 'audio/mpeg' : 'video/mp4');
-      const contentLength = upstreamRes.headers.get('content-length');
-
-      const headers = new Headers({
-        'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename="${finalFilename}"`,
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Accept-Ranges': 'bytes',
-      });
-
-      if (contentLength) {
-        headers.set('Content-Length', contentLength);
-      }
-
-      console.log(`[PROXY STREAM SUCCESS] Streaming file attachment: ${finalFilename}`);
-      return new Response(upstreamRes.body, {
-        status: 200,
-        headers,
-      });
-    } else {
-      console.error(`[PROXY STREAM FAIL] Upstream Googlevideo returned status: ${upstreamRes.status}`);
-    }
-  } catch (err) {
-    clearTimeout(timeoutId);
-    console.error(`[PROXY STREAM EXCEPTION] ${streamUrl.slice(0, 80)}:`, err.message);
-  }
-
-  return null;
-}
-
-// Local Python yt-dlp Extractor for expired URL resolution (Localhost)
+// Local Python Stream Extractor Fallback
 function runYtDlpLocalStream(videoId, isAudio) {
   return new Promise((resolve) => {
     try {
@@ -81,10 +30,10 @@ ydl_opts = {
     'skip_download': True,
     'nocheckcertificate': True,
     'geo_bypass': True,
-    'socket_timeout': 8,
+    'socket_timeout': 10,
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'web']
+            'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
         }
     },
     'http_headers': {
@@ -126,14 +75,14 @@ print("")
       const timer = setTimeout(() => {
         pyProcess.kill();
         resolve('');
-      }, 8500);
+      }, 9500);
 
       pyProcess.stdout.on('data', (data) => { stdout += data.toString(); });
       pyProcess.on('error', () => {
         clearTimeout(timer);
         resolve('');
       });
-      pyProcess.on('close', (code) => {
+      pyProcess.on('close', () => {
         clearTimeout(timer);
         resolve(stdout.trim());
       });
@@ -143,6 +92,52 @@ print("")
   });
 }
 
+// POST /api/download -> Enqueue Queue Job
+export async function POST(request) {
+  try {
+    const body = await request.json();
+    const { url, videoId, resolution, preset, formatId, title, ext, downloadUrl } = body;
+
+    if (!url && !videoId && !downloadUrl) {
+      return NextResponse.json(
+        { success: false, stage: 'download', error: 'Missing required media target parameters' },
+        { status: 400 }
+      );
+    }
+
+    const job = createDownloadJob({
+      url,
+      videoId: videoId || extractVideoId(url || ''),
+      resolution: resolution || '720p',
+      preset,
+      formatId,
+      title: title || 'media',
+      ext: ext || 'mp4',
+      downloadUrl: downloadUrl || '',
+    });
+
+    console.log(`[DOWNLOAD QUEUE JOB CREATED] Job ID: ${job.jobId} | Resolution: ${job.resolution}`);
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        jobId: job.jobId,
+        status: job.status,
+        progress: job.progress,
+        stage: job.stage,
+        fileUrl: job.fileUrl,
+      },
+    }, { status: 202 });
+  } catch (err) {
+    console.error(`[DOWNLOAD QUEUE ERROR]`, err.message);
+    return NextResponse.json(
+      { success: false, stage: 'download', error: 'Failed to create download job' },
+      { status: 500 }
+    );
+  }
+}
+
+// GET /api/download -> Direct Stream Fallback
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const targetUrl = (searchParams.get('url') || '').trim();
@@ -154,7 +149,7 @@ export async function GET(request) {
 
   console.log(`[DOWNLOAD API GET] Video ID: ${videoId} | Resolution: ${resolution} | Target URL Present: ${Boolean(targetUrl)}`);
 
-  // 1. Direct Googlevideo Proxy (If stream URL is already resolved & fresh)
+  // 1. Direct Googlevideo Proxy
   if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a'))) {
     const proxied = await proxyStreamResponse(targetUrl, title, ext);
     if (proxied) return proxied;
@@ -163,7 +158,7 @@ export async function GET(request) {
   // 2. Query Render Python Backend Proxy (/api/download)
   if (BACKEND_URL && videoId) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8500);
+    const timeoutId = setTimeout(() => controller.abort(), 9500);
 
     try {
       const bRes = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/download?videoId=${videoId}&resolution=${encodeURIComponent(resolution)}&filename=${encodeURIComponent(title)}`, {
@@ -197,7 +192,7 @@ export async function GET(request) {
     }
   }
 
-  // 3. Local Python Extractor Fallback for Expired URL Resolution (Localhost)
+  // 3. Local Python Extractor Fallback
   if (videoId) {
     const localStreamUrl = await runYtDlpLocalStream(videoId, isAudioOnly);
     if (localStreamUrl) {
