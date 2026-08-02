@@ -5,7 +5,7 @@ import { spawn } from 'child_process';
 export const maxDuration = 10;
 export const dynamic = 'force-dynamic';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || '';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
 
 // 1. Render Python Backend Proxy with 3s Timeout (Prevents Vercel Serverless Timeout)
 async function extractWithRenderBackend(url) {

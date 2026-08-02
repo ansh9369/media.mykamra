@@ -4,7 +4,7 @@ import ytdl from '@distube/ytdl-core';
 export const maxDuration = 10;
 export const dynamic = 'force-dynamic';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || '';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
 
 async function getY2MateStreamUrl(vid, isAudioOnly) {
   try {
