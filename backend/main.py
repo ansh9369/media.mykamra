@@ -1,13 +1,23 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 import yt_dlp
 import requests
 import urllib.parse
 import re
+import logging
+import sys
 
-app = FastAPI(title="MyKamra Media API")
+# Structured Logger Setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("media_backend")
+
+app = FastAPI(title="MyKamra Media Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,38 +32,27 @@ class ProbeRequest(BaseModel):
 
 def extract_video_id(url: str) -> str:
     match = re.search(r'(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})', url)
-    return match.group(1) if match else "6-60kFPNa6U"
+    return match.group(1) if match else ""
 
-def get_y2mate_dlink(video_id: str, is_audio: bool = False):
-    try:
-        res = requests.post(
-            'https://www.y2mate.com/mates/analyzeV2/ajax',
-            data={'url': f'https://www.youtube.com/watch?v={video_id}', 'q_auto': 0, 'ajax': 1},
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
-            timeout=6
-        ).json()
-
-        links = res.get('links', {})
-        target_group = links.get('mp3', {}) if is_audio else links.get('mp4', {})
-        if not target_group:
-            target_group = links.get('mp4', {}) or links.get('mp3', {})
-
-        if target_group:
-            first_val = list(target_group.values())[0]
-            k_val = first_val.get('k')
-            if k_val:
-                c_res = requests.post(
-                    'https://www.y2mate.com/mates/convertV2/index',
-                    data={'vid': video_id, 'k': k_val},
-                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
-                    timeout=6
-                ).json()
-                dlink = c_res.get('dlink')
-                if dlink:
-                    return dlink
-    except Exception as e:
-        print("Y2mate resolution error:", e)
-    return None
+def get_yt_dlp_options():
+    return {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': True,
+        'geo_bypass': True,
+        'socket_timeout': 20,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.youtube.com/',
+        }
+    }
 
 @app.get("/")
 def root():
@@ -61,34 +60,26 @@ def root():
 
 @app.post("/api/probe")
 def probe_video(req: ProbeRequest):
-    url = req.url.strip()
-    if not url or ("youtube.com" not in url and "youtu.be" not in url):
-        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+    raw_url = req.url.strip()
+    logger.info(f"[PROBE START] Incoming URL: {raw_url}")
 
-    video_id = extract_video_id(url)
+    if not raw_url or ("youtube.com" not in raw_url and "youtu.be" not in raw_url):
+        logger.warning(f"[PROBE FAIL] Invalid YouTube URL: {raw_url}")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "stage": "probe", "error": "Please enter a valid YouTube URL."}
+        )
 
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': False,
-        'skip_download': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': True,
-        'geo_bypass': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-    }
+    video_id = extract_video_id(raw_url)
+    logger.info(f"[PROBE EXTRACTED] Video ID: {video_id}")
+
+    ydl_opts = get_yt_dlp_options()
 
     try:
         info = None
+        target_watch_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else raw_url
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            info = ydl.extract_info(target_watch_url, download=False)
 
         if info and info.get('formats'):
             vid = info.get('id', video_id)
@@ -103,7 +94,8 @@ def probe_video(req: ProbeRequest):
             seen = set()
 
             for f in raw_formats:
-                if not f.get('url'):
+                url_download = f.get('url', '')
+                if not url_download or 'googlevideo.com' not in url_download:
                     continue
 
                 vcodec = f.get('vcodec', 'none')
@@ -140,7 +132,6 @@ def probe_video(req: ProbeRequest):
                 seen.add(key)
 
                 filesize = f.get('filesize') or f.get('filesize_approx') or 0
-                url_download = f.get('url') or '#'
 
                 processed_formats.append({
                     "formatId": format_id,
@@ -158,6 +149,7 @@ def probe_video(req: ProbeRequest):
             if processed_formats:
                 processed_formats.sort(key=lambda x: (not x['hasAudio'], not x['hasVideo']))
                 presets = list(set(fmt['resolution'] for fmt in processed_formats))
+                logger.info(f"[PROBE SUCCESS] Video ID: {vid} | Formats Found: {len(processed_formats)}")
                 return {
                     "success": True,
                     "data": {
@@ -173,88 +165,16 @@ def probe_video(req: ProbeRequest):
                     }
                 }
     except Exception as e:
-        print("yt_dlp probe error:", str(e))
+        logger.error(f"[PROBE ERROR] yt_dlp extraction exception for {video_id}: {str(e)}")
 
-    # OEmbed metadata fallback
-    try:
-        o_res = requests.get(f"https://www.youtube.com/oembed?url={urllib.parse.quote(url)}&format=json", timeout=5)
-        o_data = o_res.json() if o_res.status_code == 200 else {}
-        title = o_data.get("title", "YouTube Video")
-        uploader = o_data.get("author_name", "YouTube Creator")
-        thumbnail = o_data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-    except Exception:
-        title = "YouTube Video"
-        uploader = "YouTube Creator"
-        thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    logger.warning(f"[PROBE FAIL] Unable to fetch downloadable media for {raw_url}")
+    return JSONResponse(
+        status_code=404,
+        content={"success": False, "stage": "probe", "error": "Unable to fetch downloadable media"}
+    )
 
-    return {
-        "success": True,
-        "data": {
-            "type": "video",
-            "id": video_id,
-            "title": title,
-            "uploader": uploader,
-            "duration": 213,
-            "thumbnail": thumbnail,
-            "viewCount": 587000000,
-            "availableQualityPresets": ["720p", "360p", "audio only"],
-            "formats": [
-                {
-                    "formatId": "720p_mp4",
-                    "ext": "mp4",
-                    "resolution": "720p",
-                    "fps": 30,
-                    "hasVideo": True,
-                    "hasAudio": True,
-                    "playableAsIs": True,
-                    "filesizeApprox": 45000000,
-                    "note": "720p HD (Video+Audio)",
-                    "downloadUrl": f"https://ssyoutube.com/watch?v={video_id}"
-                },
-                {
-                    "formatId": "360p_mp4",
-                    "ext": "mp4",
-                    "resolution": "360p",
-                    "fps": 30,
-                    "hasVideo": True,
-                    "hasAudio": True,
-                    "playableAsIs": True,
-                    "filesizeApprox": 18000000,
-                    "note": "360p SD (Video+Audio)",
-                    "downloadUrl": f"https://ssyoutube.com/watch?v={video_id}"
-                },
-                {
-                    "formatId": "audio_m4a",
-                    "ext": "m4a",
-                    "resolution": "audio only",
-                    "fps": None,
-                    "hasVideo": False,
-                    "hasAudio": True,
-                    "playableAsIs": False,
-                    "filesizeApprox": 5000000,
-                    "note": "Audio Only",
-                    "downloadUrl": f"https://ssyoutube.com/watch?v={video_id}"
-                }
-            ]
-        }
-    }
-
-def extract_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'skip_download': True,
-        'nocheckcertificate': True,
-        'geo_bypass': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-    }
+def resolve_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
+    ydl_opts = get_yt_dlp_options()
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
@@ -272,34 +192,72 @@ def extract_direct_stream_url(video_id: str, is_audio: bool = False) -> str:
                         return url_fmt
                     if not is_audio and has_video:
                         return url_fmt
-                # Fallback to any Googlevideo URL
                 for f in raw_formats:
                     url_fmt = f.get('url', '')
                     if 'googlevideo.com' in url_fmt:
                         return url_fmt
     except Exception as e:
-        print("yt_dlp stream extraction error:", e)
-    return None
+        logger.error(f"[RESOLVE STREAM ERROR] {video_id}: {str(e)}")
+    return ""
 
 @app.get("/api/download")
 def download_stream(url: str = "", videoId: str = "", video_id: str = "", filename: str = "video.mp4", resolution: str = ""):
-    target_url = url
+    target_url = url.strip()
     vid = videoId or video_id or extract_video_id(target_url)
     is_audio = "audio" in resolution.lower() or filename.endswith(".mp3") or filename.endswith(".m4a")
 
-    # 1. Backup stream redirect if target_url is already a resolved googlevideo CDN link
+    logger.info(f"[DOWNLOAD START] Video ID: {vid} | Resolution: {resolution} | Target URL Present: {bool(target_url)}")
+
+    direct_stream_url = ""
     if target_url and "googlevideo.com" in target_url:
-        return RedirectResponse(url=target_url)
+        direct_stream_url = target_url
+    elif vid:
+        direct_stream_url = resolve_direct_stream_url(vid, is_audio)
 
-    # 2. High-Speed direct CDN MP4 resolution via Y2Mate API
-    y2_dlink = get_y2mate_dlink(vid, is_audio)
-    if y2_dlink:
-        return RedirectResponse(url=y2_dlink)
+    if not direct_stream_url:
+        logger.error(f"[DOWNLOAD FAIL] Stream URL resolution failed for Video ID: {vid}")
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "stage": "download", "error": "Unable to fetch downloadable media"}
+        )
 
-    # 3. Direct yt_dlp stream extraction with android/web player client
-    direct_stream = extract_direct_stream_url(vid, is_audio)
-    if direct_stream:
-        return RedirectResponse(url=direct_stream)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.youtube.com/',
+        'Origin': 'https://www.youtube.com',
+    }
 
-    # 4. Fallback unblocked 1-Click Downloader
-    return RedirectResponse(url=f"https://ssyoutube.com/watch?v={vid}")
+    try:
+        req = requests.get(direct_stream_url, headers=headers, stream=True, timeout=20)
+        if req.status_code == 200:
+            clean_filename = re.sub(r'[^a-zA-Z0-9 _-]', '', filename).strip() or "video"
+            ext = "mp3" if is_audio else "mp4"
+            final_name = f"{clean_filename}.{ext}"
+
+            content_type = req.headers.get("content-type") or ("audio/mpeg" if is_audio else "video/mp4")
+            content_length = req.headers.get("content-length")
+
+            res_headers = {
+                "Content-Type": content_type,
+                "Content-Disposition": f'attachment; filename="{final_name}"',
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Accept-Ranges": "bytes",
+            }
+            if content_length:
+                res_headers["Content-Length"] = content_length
+
+            logger.info(f"[DOWNLOAD PROXY SUCCESS] Streaming {final_name} to client")
+            return StreamingResponse(
+                req.iter_content(chunk_size=64 * 1024),
+                status_code=200,
+                headers=res_headers
+            )
+        else:
+            logger.error(f"[DOWNLOAD PROXY FAIL] Upstream Googlevideo status code: {req.status_code}")
+    except Exception as e:
+        logger.error(f"[DOWNLOAD PROXY ERROR] Stream exception: {str(e)}")
+
+    return JSONResponse(
+        status_code=502,
+        content={"success": False, "stage": "proxy", "error": "Unable to fetch downloadable media"}
+    )

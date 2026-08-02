@@ -1,19 +1,23 @@
 import { NextResponse } from 'next/server';
-import ytdl from '@distube/ytdl-core';
 import { spawn } from 'child_process';
 
-export const maxDuration = 10;
+export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
 
-// 1. Render Python Backend Proxy with 3s Timeout (Prevents Vercel Serverless Timeout)
-async function extractWithRenderBackend(url) {
-  if (!BACKEND_URL || BACKEND_URL.includes('localhost')) return null;
+function extractVideoId(url) {
+  const match = url.match(/(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : '';
+}
+
+// 1. Render Python Backend Probe Proxy (20-Second Timeout with AbortController)
+async function extractWithBackend(url) {
+  if (!BACKEND_URL) return null;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
+
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
-
     const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/probe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -22,134 +26,30 @@ async function extractWithRenderBackend(url) {
     });
     clearTimeout(timeoutId);
 
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data;
-  } catch (err) {
-    console.error('Render backend extraction timeout/error:', err.message);
-    return null;
-  }
-}
-
-// 2. Primary Node.js Extractor using @distube/ytdl-core (3.5s Strict Race Timeout)
-async function extractWithYtdlCore(url) {
-  try {
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('YTDL_TIMEOUT')), 3500)
-    );
-
-    const infoPromise = ytdl.getInfo(url, {
-      requestOptions: {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-      },
-    });
-
-    const info = await Promise.race([infoPromise, timeoutPromise]);
-
-    if (!info || !info.videoDetails) return null;
-
-    const details = info.videoDetails;
-    const videoId = details.videoId || '';
-    const title = details.title || 'YouTube Video';
-    const uploader = details.author ? details.author.name : 'YouTube Creator';
-    const duration = parseInt(details.lengthSeconds || '0', 10);
-    const thumbnail =
-      details.thumbnails && details.thumbnails.length > 0
-        ? details.thumbnails[details.thumbnails.length - 1].url
-        : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-    const viewCount = parseInt(details.viewCount || '0', 10);
-    const uploadDate = details.publishDate || '';
-
-    const rawFormats = info.formats || [];
-    const processedFormats = [];
-    const seen = new Set();
-
-    for (const f of rawFormats) {
-      if (!f.url) continue;
-
-      const hasVideo = Boolean(f.hasVideo);
-      const hasAudio = Boolean(f.hasAudio);
-
-      if (!hasVideo && !hasAudio) continue;
-
-      let resolution = 'audio only';
-      if (hasVideo) {
-        if (f.qualityLabel) {
-          resolution = f.qualityLabel.replace(/p\d+$/, 'p');
-        } else if (f.height) {
-          resolution = `${f.height}p`;
-        } else {
-          resolution = 'SD';
-        }
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && data.data && data.data.formats && data.data.formats.length > 0) {
+        console.log(`[PROBE BACKEND SUCCESS] URL: ${url} | Formats: ${data.data.formats.length}`);
+        return data;
       }
-
-      const ext = f.container || (hasVideo ? 'mp4' : 'm4a');
-      const formatId = `${f.itag || ''}_${resolution}_${ext}`;
-      const key = `${resolution}_${ext}_${hasVideo}_${hasAudio}`;
-
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const filesize = parseInt(f.contentLength || '0', 10) || 0;
-
-      processedFormats.push({
-        formatId,
-        ext,
-        resolution,
-        fps: f.fps || null,
-        hasVideo,
-        hasAudio,
-        playableAsIs: hasVideo && hasAudio,
-        filesizeApprox: filesize,
-        note: `${resolution} (${hasVideo && hasAudio ? 'Video+Audio' : hasAudio ? 'Audio Only' : 'Video Only'})`,
-        downloadUrl: f.url,
-      });
     }
-
-    if (processedFormats.length === 0) return null;
-
-    processedFormats.sort((a, b) => {
-      if (a.hasAudio !== b.hasAudio) return a.hasAudio ? -1 : 1;
-      if (a.hasVideo !== b.hasVideo) return a.hasVideo ? -1 : 1;
-      return 0;
-    });
-
-    const presets = Array.from(new Set(processedFormats.map((f) => f.resolution)));
-
-    return {
-      success: true,
-      data: {
-        type: 'video',
-        id: videoId,
-        title,
-        uploader,
-        duration,
-        thumbnail,
-        viewCount,
-        uploadDate,
-        availableQualityPresets: presets,
-        formats: processedFormats,
-      },
-    };
   } catch (err) {
-    console.error('ytdl-core extraction error:', err.message);
-    return null;
+    clearTimeout(timeoutId);
+    console.error(`[PROBE BACKEND ERROR] ${url}:`, err.message);
   }
+  return null;
 }
 
-// 3. Fallback Local Python yt-dlp Execution (Only runs if python binary is available, 1.5s timeout)
-function runYtDlpPython(url) {
+// 2. Local Python yt-dlp Extractor Fallback (20-Second Timeout)
+function runYtDlpLocal(url) {
   return new Promise((resolve) => {
     try {
       const pyProcess = spawn('python', ['-c', `
-import yt_dlp, json, sys, urllib.parse, requests, re
+import yt_dlp, json, sys, re
 
 def extract_video_id(url):
     match = re.search(r'(?:v=|\\/embed\\/|\\/shorts\\/|youtu\\.be\\/)([a-zA-Z0-9_-]{11})', url)
-    return match.group(1) if match else "coQ95u7w_18"
+    return match.group(1) if match else ""
 
 url = sys.argv[1].strip()
 video_id = extract_video_id(url)
@@ -160,12 +60,16 @@ ydl_opts = {
     'skip_download': True,
     'nocheckcertificate': True,
     'geo_bypass': True,
+    'socket_timeout': 20,
     'extractor_args': {
         'youtube': {
             'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
         }
     },
-    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.youtube.com/',
+    }
 }
 
 try:
@@ -174,13 +78,14 @@ try:
         if info and info.get('formats'):
             vid = info.get('id', video_id)
             title = info.get('title', 'YouTube Video')
-            uploader = info.get('uploader') or 'YouTube Creator'
+            uploader = info.get('uploader') or info.get('channel') or 'YouTube Creator'
             duration = info.get('duration') or 0
             thumbnail = info.get('thumbnail') or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
             view_count = info.get('view_count') or 0
             raw_formats = info.get('formats', [])
             processed = []
             seen = set()
+
             for f in raw_formats:
                 url_fmt = f.get('url', '')
                 if not url_fmt or 'googlevideo.com' not in url_fmt: continue
@@ -207,6 +112,7 @@ try:
                     "note": f"{res} ({'Video+Audio' if (has_video and has_audio) else 'Audio' if has_audio else 'Video Only'})",
                     "downloadUrl": url_fmt
                 })
+
             if processed:
                 presets = list(set(x['resolution'] for x in processed))
                 print(json.dumps({"success": True, "data": {"type": "video", "id": vid, "title": title, "uploader": uploader, "duration": duration, "thumbnail": thumbnail, "viewCount": view_count, "uploadDate": "", "availableQualityPresets": presets, "formats": processed}}))
@@ -214,14 +120,14 @@ try:
 except Exception as e:
     pass
 
-print(json.dumps({"success": False}))
+print(json.dumps({"success": False, "stage": "probe", "error": "Unable to fetch downloadable media"}))
       `, url], { cwd: process.cwd() });
 
       let stdout = '';
       const timer = setTimeout(() => {
         pyProcess.kill();
         resolve(null);
-      }, 1500);
+      }, 20000);
 
       pyProcess.stdout.on('data', (data) => { stdout += data.toString(); });
       pyProcess.on('error', () => {
@@ -244,127 +150,42 @@ print(json.dumps({"success": False}))
   });
 }
 
-// 4. Fast Fallback oEmbed Metadata (Always completes in < 200ms)
-async function fetchOEmbedFallback(url, videoId) {
-  try {
-    const oRes = await fetch(
-      `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
-      { headers: { 'User-Agent': 'Mozilla/5.0' } }
-    );
-    const oData = oRes.ok ? await oRes.json() : {};
-    const title = oData.title || 'YouTube Video';
-    const uploader = oData.author_name || 'YouTube Creator';
-    const thumbnail = oData.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-
-    return {
-      success: true,
-      data: {
-        type: 'video',
-        id: videoId,
-        title,
-        uploader,
-        duration: 213,
-        thumbnail,
-        viewCount: 587000000,
-        uploadDate: '',
-        availableQualityPresets: ['720p', '360p', 'audio only'],
-        formats: [
-          {
-            formatId: '720p_mp4',
-            ext: 'mp4',
-            resolution: '720p',
-            fps: 30,
-            hasVideo: true,
-            hasAudio: true,
-            playableAsIs: true,
-            filesizeApprox: 45000000,
-            note: '720p HD (Video+Audio)',
-            downloadUrl: `https://ssyoutube.com/watch?v=${videoId}`,
-          },
-          {
-            formatId: '360p_mp4',
-            ext: 'mp4',
-            resolution: '360p',
-            fps: 30,
-            hasVideo: true,
-            hasAudio: true,
-            playableAsIs: true,
-            filesizeApprox: 18000000,
-            note: '360p SD (Video+Audio)',
-            downloadUrl: `https://ssyoutube.com/watch?v=${videoId}`,
-          },
-          {
-            formatId: 'audio_m4a',
-            ext: 'm4a',
-            resolution: 'audio only',
-            fps: null,
-            hasVideo: false,
-            hasAudio: true,
-            playableAsIs: false,
-            filesizeApprox: 5000000,
-            note: 'Audio Only',
-            downloadUrl: `https://ssyoutube.com/watch?v=${videoId}`,
-          },
-        ],
-      },
-    };
-  } catch {
-    return null;
-  }
-}
-
 export async function POST(request) {
+  let targetUrl = '';
   try {
     const body = await request.json();
-    const { url } = body;
+    targetUrl = (body.url || '').trim();
+    console.log(`[PROBE ROUTE START] Incoming URL: ${targetUrl}`);
 
-    if (!url || typeof url !== 'string' || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
+    if (!targetUrl || (!targetUrl.includes('youtube.com') && !targetUrl.includes('youtu.be'))) {
+      console.warn(`[PROBE ROUTE REJECT] Invalid URL: ${targetUrl}`);
       return NextResponse.json(
-        { success: false, error: 'Please enter a valid YouTube URL' },
+        { success: false, stage: 'probe', error: 'Please enter a valid YouTube URL' },
         { status: 400 }
       );
     }
 
-    const match = url.match(/(?:v=|\/embed\/|\/144\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-    const videoId = match ? match[1] : '';
-
-    // Step 0: Render Python Backend (3-second timeout)
-    const renderResult = await extractWithRenderBackend(url.trim());
-    if (renderResult && renderResult.success && renderResult.data && renderResult.data.formats) {
-      const hasRealUrl = renderResult.data.formats.some(f => f.downloadUrl && !f.downloadUrl.includes('youtube.com/watch'));
-      if (hasRealUrl) {
-        return NextResponse.json(renderResult);
-      }
+    // Step 1: Query Python Backend
+    const backendResult = await extractWithBackend(targetUrl);
+    if (backendResult && backendResult.success) {
+      return NextResponse.json(backendResult);
     }
 
-    // Step 1: Extract with @distube/ytdl-core (3.5s Strict Race Timeout on Vercel)
-    const ytdlResult = await extractWithYtdlCore(url.trim());
-    if (ytdlResult && ytdlResult.success) {
-      return NextResponse.json(ytdlResult);
+    // Step 2: Query Local Python Extractor
+    const localResult = await runYtDlpLocal(targetUrl);
+    if (localResult && localResult.success) {
+      return NextResponse.json(localResult);
     }
 
-    // Step 2: Try Local Python yt_dlp extraction (1.5s timeout)
-    const pyResult = await runYtDlpPython(url.trim());
-    if (pyResult && pyResult.success) {
-      return NextResponse.json(pyResult);
-    }
-
-    // Step 3: Fast Fallback oEmbed (Guarantees < 200ms response & prevents 504 Gateway Timeout)
-    if (videoId) {
-      const fallback = await fetchOEmbedFallback(url.trim(), videoId);
-      if (fallback && fallback.success) {
-        return NextResponse.json(fallback);
-      }
-    }
-
+    console.error(`[PROBE ROUTE FAIL] Extraction failed for: ${targetUrl}`);
     return NextResponse.json(
-      { success: false, error: 'Could not extract video metadata.' },
-      { status: 500 }
+      { success: false, stage: 'probe', error: 'Unable to fetch downloadable media' },
+      { status: 404 }
     );
   } catch (err) {
-    console.error('Probe API route error:', err);
+    console.error(`[PROBE ROUTE EXCEPTION] Error processing request:`, err.message);
     return NextResponse.json(
-      { success: false, error: err.message || 'Internal Server Error' },
+      { success: false, stage: 'probe', error: 'Unable to fetch downloadable media' },
       { status: 500 }
     );
   }
