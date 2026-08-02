@@ -14,6 +14,7 @@ const sora = Sora({
 });
 
 export const metadata = {
+  metadataBase: new URL('https://media.mykamra.in'),
   title: 'MyKamra Media — Fast 4K & MP3 Extractor | media.mykamra.in',
   description:
     'Official media processing hub by MyKamra (mykamra.in). Download and convert YouTube videos, audio, and media signals in 4K, 1080p, 720p, and high-bitrate MP3 instantly.',
@@ -49,7 +50,7 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${jetbrainsMono.variable} ${sora.variable}`}>
-      <body>{children}</body>
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

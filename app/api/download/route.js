@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { spawn } from 'child_process';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -63,6 +64,84 @@ async function proxyStreamResponse(streamUrl, filename, ext) {
   return null;
 }
 
+// Local Python yt-dlp Extractor for expired URL resolution
+function runYtDlpLocalStream(videoId, isAudio) {
+  return new Promise((resolve) => {
+    try {
+      const pyProcess = spawn('python', ['-c', `
+import yt_dlp, sys
+
+vid = sys.argv[1].strip()
+is_audio = sys.argv[2].lower() == 'true'
+
+ydl_opts = {
+    'quiet': True,
+    'no_warnings': True,
+    'skip_download': True,
+    'nocheckcertificate': True,
+    'geo_bypass': True,
+    'socket_timeout': 20,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web']
+        }
+    },
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.youtube.com/',
+    }
+}
+
+try:
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
+        if info and info.get('formats'):
+            raw_formats = info.get('formats', [])
+            for f in raw_formats:
+                url_fmt = f.get('url', '')
+                if not url_fmt or not url_fmt.startswith('http'): continue
+                vcodec = f.get('vcodec', 'none')
+                acodec = f.get('acodec', 'none')
+                has_video = vcodec != 'none' and vcodec is not None
+                has_audio = acodec != 'none' and acodec is not None
+                if is_audio and has_audio:
+                    print(url_fmt)
+                    sys.exit(0)
+                if not is_audio and has_video:
+                    print(url_fmt)
+                    sys.exit(0)
+            for f in raw_formats:
+                url_fmt = f.get('url', '')
+                if url_fmt and url_fmt.startswith('http'):
+                    print(url_fmt)
+                    sys.exit(0)
+except Exception:
+    pass
+
+print("")
+      `, videoId, String(isAudio)], { cwd: process.cwd() });
+
+      let stdout = '';
+      const timer = setTimeout(() => {
+        pyProcess.kill();
+        resolve('');
+      }, 20000);
+
+      pyProcess.stdout.on('data', (data) => { stdout += data.toString(); });
+      pyProcess.on('error', () => {
+        clearTimeout(timer);
+        resolve('');
+      });
+      pyProcess.on('close', (code) => {
+        clearTimeout(timer);
+        resolve(stdout.trim());
+      });
+    } catch {
+      resolve('');
+    }
+  });
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const targetUrl = (searchParams.get('url') || '').trim();
@@ -70,10 +149,11 @@ export async function GET(request) {
   const ext = searchParams.get('ext') || 'mp4';
   const videoId = searchParams.get('videoId') || searchParams.get('videoid') || extractVideoId(targetUrl);
   const resolution = searchParams.get('resolution') || '';
+  const isAudioOnly = resolution.toLowerCase().includes('audio') || ext === 'mp3' || ext === 'm4a';
 
   console.log(`[DOWNLOAD API GET] Video ID: ${videoId} | Resolution: ${resolution} | Target URL Present: ${Boolean(targetUrl)}`);
 
-  // 1. Direct Googlevideo Proxy (If stream URL is already resolved)
+  // 1. Direct Googlevideo Proxy (If stream URL is already resolved & fresh)
   if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a'))) {
     const proxied = await proxyStreamResponse(targetUrl, title, ext);
     if (proxied) return proxied;
@@ -113,6 +193,15 @@ export async function GET(request) {
     } catch (err) {
       clearTimeout(timeoutId);
       console.error(`[DOWNLOAD BACKEND PROXY ERROR] Video ID ${videoId}:`, err.message);
+    }
+  }
+
+  // 3. Local Python Extractor Fallback for Expired URL Resolution
+  if (videoId) {
+    const localStreamUrl = await runYtDlpLocalStream(videoId, isAudioOnly);
+    if (localStreamUrl) {
+      const proxied = await proxyStreamResponse(localStreamUrl, title, ext);
+      if (proxied) return proxied;
     }
   }
 
