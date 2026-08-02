@@ -160,6 +160,11 @@ ydl_opts = {
     'skip_download': True,
     'nocheckcertificate': True,
     'geo_bypass': True,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
+        }
+    },
     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
 }
 
@@ -177,7 +182,8 @@ try:
             processed = []
             seen = set()
             for f in raw_formats:
-                if not f.get('url'): continue
+                url_fmt = f.get('url', '')
+                if not url_fmt or 'googlevideo.com' not in url_fmt: continue
                 vcodec = f.get('vcodec', 'none')
                 acodec = f.get('acodec', 'none')
                 has_video = vcodec != 'none' and vcodec is not None
@@ -199,7 +205,7 @@ try:
                     "playableAsIs": has_video and has_audio,
                     "filesizeApprox": f.get('filesize') or f.get('filesize_approx') or 0,
                     "note": f"{res} ({'Video+Audio' if (has_video and has_audio) else 'Audio' if has_audio else 'Video Only'})",
-                    "downloadUrl": f.get('url')
+                    "downloadUrl": url_fmt
                 })
             if processed:
                 presets = list(set(x['resolution'] for x in processed))
