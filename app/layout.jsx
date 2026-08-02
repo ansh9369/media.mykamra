@@ -37,7 +37,11 @@ export const metadata = {
     type: 'website',
   },
   icons: {
-    icon: '/saveTube.png',
+    icon: [
+      { url: '/saveTube.png', type: 'image/png' },
+      { url: '/icon.png', type: 'image/png' },
+    ],
+    shortcut: '/saveTube.png',
     apple: '/saveTube.png',
   },
 };
