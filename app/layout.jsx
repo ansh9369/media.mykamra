@@ -33,7 +33,12 @@ export const metadata = {
       'Official media extraction and signal processing tool by MyKamra.in. Convert and download YouTube videos in 4K, 1080p, and MP3 instantly.',
     url: 'https://media.mykamra.in',
     siteName: 'MyKamra Media',
+    images: [{ url: '/saveTube.png', width: 512, height: 512, alt: 'SaveTube MyKamra Logo' }],
     type: 'website',
+  },
+  icons: {
+    icon: '/saveTube.png',
+    apple: '/saveTube.png',
   },
 };
 

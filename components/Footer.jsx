@@ -25,22 +25,16 @@ export default function Footer() {
         {/* Col 1 */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-            <div
-              style={{
-                display: 'grid',
-                placeItems: 'center',
-                width: 28,
-                height: 28,
-                borderRadius: 6,
-                background: 'linear-gradient(135deg, #4CE0D2, #E8A94C)',
-                color: 'var(--void)',
-                fontWeight: 800,
-                fontSize: 14,
-                fontFamily: 'var(--font-display)',
-              }}
-            >
-              M
-            </div>
+            <img
+            src="/saveTube.png"
+            alt="SaveTube - MyKamra Logo"
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: 6,
+              objectFit: 'contain',
+            }}
+          />
             <span
               style={{
                 fontFamily: 'var(--font-display)',

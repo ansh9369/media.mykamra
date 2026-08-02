@@ -25,22 +25,16 @@ export default function Navbar() {
           rel="noopener noreferrer"
           style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 10 }}
         >
-          <div
+          <img
+            src="/saveTube.png"
+            alt="SaveTube - MyKamra Logo"
             style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 34,
-              height: 34,
+              width: 36,
+              height: 36,
               borderRadius: 8,
-              background: 'linear-gradient(135deg, #4CE0D2, #E8A94C)',
-              color: 'var(--void)',
-              fontWeight: 800,
-              fontSize: 16,
-              fontFamily: 'var(--font-display)',
+              objectFit: 'contain',
             }}
-          >
-            M
-          </div>
+          />
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span
