@@ -53,6 +53,8 @@ async function proxyMediaStream(streamUrl, title, ext) {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': '*/*',
+        'Referer': 'https://www.youtube.com/',
+        'Origin': 'https://www.youtube.com',
       },
     });
 
@@ -89,7 +91,6 @@ export async function GET(request) {
   if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a'))) {
     const proxied = await proxyMediaStream(targetUrl, title, ext);
     if (proxied) return proxied;
-    return NextResponse.redirect(targetUrl);
   }
 
   const isAudioOnly = resolution.toLowerCase().includes('audio');
