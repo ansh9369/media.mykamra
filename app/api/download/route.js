@@ -211,7 +211,7 @@ export async function GET(request) {
   // 4. Query Render Python Backend Proxy (/api/download)
   if (BACKEND_URL && videoId) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 9500);
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
 
     try {
       const bRes = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/download?videoId=${videoId}&resolution=${encodeURIComponent(resolution)}&filename=${encodeURIComponent(title)}`, {

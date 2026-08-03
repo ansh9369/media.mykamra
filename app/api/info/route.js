@@ -113,7 +113,7 @@ async function extractWithYtdlCore(url) {
 async function extractWithBackend(url) {
   if (!BACKEND_URL) return null;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
     const backendEndpoint = `${BACKEND_URL.replace(/\/$/, '')}/api/info`;
