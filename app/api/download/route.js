@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
+import ytdl from '@distube/ytdl-core';
 import { createDownloadJob } from '@/lib/jobStore';
 import { proxyStreamResponse } from '@/lib/streamProxy';
 
@@ -10,11 +11,45 @@ export const dynamic = 'force-dynamic';
 const BACKEND_URL = process.env.BACKEND_URL || 'https://media-mykamra-api.onrender.com';
 
 function extractVideoId(url) {
+  if (!url) return '';
   const match = url.match(/(?:v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   return match ? match[1] : '';
 }
 
-// Local Python Stream Extractor Fallback
+// 1. Pure Node.js Stream URL Resolver (Works on Vercel / Cloud without Python)
+async function resolveYtdlCoreStreamUrl(videoId, isAudio) {
+  if (!videoId) return '';
+  try {
+    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, {
+      requestOptions: {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          Referer: 'https://www.youtube.com/',
+        },
+      },
+    });
+
+    if (info && info.formats) {
+      const formats = info.formats.filter((f) => f.url && f.url.startsWith('http'));
+      if (isAudio) {
+        const audioFormat =
+          formats.find((f) => f.hasAudio && !f.hasVideo) || formats.find((f) => f.hasAudio);
+        if (audioFormat) return audioFormat.url;
+      }
+      const videoFormat =
+        formats.find((f) => f.hasVideo && f.hasAudio) ||
+        formats.find((f) => f.hasVideo) ||
+        formats[0];
+      if (videoFormat) return videoFormat.url;
+    }
+  } catch (err) {
+    console.error(`[DOWNLOAD YTDL-CORE STREAM WARN] Video ID ${videoId}:`, err.message);
+  }
+  return '';
+}
+
+// 2. Local Python Stream Extractor Fallback
 function runYtDlpLocalStream(videoId, isAudio) {
   return new Promise((resolve) => {
     try {
@@ -149,13 +184,31 @@ export async function GET(request) {
 
   console.log(`[DOWNLOAD API GET] Video ID: ${videoId} | Resolution: ${resolution} | Target URL Present: ${Boolean(targetUrl)}`);
 
-  // 1. Direct Googlevideo Proxy
+  // 1. Direct Googlevideo Proxy if direct CDN url is given
   if (targetUrl && (targetUrl.includes('googlevideo.com') || targetUrl.includes('.mp4') || targetUrl.includes('.m4a'))) {
     const proxied = await proxyStreamResponse(targetUrl, title, ext);
     if (proxied) return proxied;
   }
 
-  // 2. Query Render Python Backend Proxy (/api/download)
+  // 2. Python Stream Extractor (Produces valid signed Google CDN URLs)
+  if (videoId) {
+    const localStreamUrl = await runYtDlpLocalStream(videoId, isAudioOnly);
+    if (localStreamUrl) {
+      const proxied = await proxyStreamResponse(localStreamUrl, title, ext);
+      if (proxied) return proxied;
+    }
+  }
+
+  // 3. Pure Node.js Stream Resolver via ytdl-core
+  if (videoId) {
+    const nodeStreamUrl = await resolveYtdlCoreStreamUrl(videoId, isAudioOnly);
+    if (nodeStreamUrl) {
+      const proxied = await proxyStreamResponse(nodeStreamUrl, title, ext);
+      if (proxied) return proxied;
+    }
+  }
+
+  // 4. Query Render Python Backend Proxy (/api/download)
   if (BACKEND_URL && videoId) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 9500);
@@ -189,15 +242,6 @@ export async function GET(request) {
     } catch (err) {
       clearTimeout(timeoutId);
       console.error(`[DOWNLOAD BACKEND PROXY ERROR] Video ID ${videoId}:`, err.message);
-    }
-  }
-
-  // 3. Local Python Extractor Fallback
-  if (videoId) {
-    const localStreamUrl = await runYtDlpLocalStream(videoId, isAudioOnly);
-    if (localStreamUrl) {
-      const proxied = await proxyStreamResponse(localStreamUrl, title, ext);
-      if (proxied) return proxied;
     }
   }
 

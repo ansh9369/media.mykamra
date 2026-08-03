@@ -61,7 +61,7 @@ def get_yt_dlp_options():
         'socket_timeout': 20,
         'extractor_args': {
             'youtube': {
-                'player_client': ['mweb', 'tv', 'ios', 'android_vr', 'web']
+                'player_client': ['android_vr', 'ios', 'mweb', 'tv', 'web']
             }
         },
         'http_headers': {
