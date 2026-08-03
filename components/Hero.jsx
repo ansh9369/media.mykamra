@@ -75,6 +75,15 @@ export default function Hero() {
       const videoId = result?.id || '';
       const rawUrl = format.downloadUrl || '';
 
+      setJobProgressMap((prev) => ({
+        ...prev,
+        [fmtId]: {
+          status: 'downloading',
+          progress: 50,
+          stage: 'Preparing media stream...',
+        },
+      }));
+
       // Step 1: Create Queue Job via /api/download
       const jobData = await createDownloadJob({
         url: url.trim() || rawUrl,
@@ -90,30 +99,17 @@ export default function Hero() {
       setJobProgressMap((prev) => ({
         ...prev,
         [fmtId]: {
-          status: jobData.status,
-          progress: jobData.progress,
-          stage: jobData.stage,
+          status: 'completed',
+          progress: 100,
+          stage: 'Media ready for download',
         },
       }));
 
-      // Step 2: Poll status via /api/download/:jobId
-      const finalJob = await pollDownloadJobStatus(jobData.jobId, (progressData) => {
-        setJobProgressMap((prev) => ({
-          ...prev,
-          [fmtId]: {
-            status: progressData.status,
-            progress: progressData.progress,
-            stage: progressData.stage,
-          },
-        }));
-      });
-
-      // Step 3: Trigger direct media stream download via /api/files/:jobId
-      const fileStreamUrl = getDownloadFileUrl(finalJob.jobId);
+      // Step 2: Trigger direct media stream download via stateless fileUrl
+      const fileStreamUrl = jobData.fileUrl || `/api/download?url=${encodeURIComponent(rawUrl)}&title=${encodeURIComponent(title)}&ext=${ext}&videoId=${encodeURIComponent(videoId)}&resolution=${encodeURIComponent(format.resolution)}`;
       window.location.href = fileStreamUrl;
     } catch (err) {
-      console.error('Download job error:', err);
-      // Direct stream fallback trigger if queue fails
+      console.error('Download trigger error:', err);
       const fallbackUrl = `/api/download?url=${encodeURIComponent(format.downloadUrl || '')}&title=${encodeURIComponent(result?.title || 'media')}&ext=${encodeURIComponent(format.ext || 'mp4')}&videoId=${encodeURIComponent(result?.id || '')}&resolution=${encodeURIComponent(format.resolution || '')}`;
       window.location.href = fallbackUrl;
     } finally {
